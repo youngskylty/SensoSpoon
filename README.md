@@ -22,6 +22,8 @@ START_PROJECT('all')            % Rebuild, validate, preview, simulate, and anim
 
 Verified with MATLAB R2026a and Simulink. The current model does not require the legacy Simscape Multibody model. Geometry is generated on demand; animation export requires a working graphics environment.
 
+This project includes a project-scoped `.mcp.json` so Claude Code can connect to MATLAB. It points at absolute, machine-specific paths for the MCP server binary and MATLAB root — if you clone this repo on another machine, edit those two paths in `.mcp.json` to match your local install before using Claude Code here.
+
 ## Project structure
 
 ```text
