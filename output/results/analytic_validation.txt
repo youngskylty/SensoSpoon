@@ -1,0 +1,8 @@
+{
+  "rod_closure_error_m": 6.9388939039072284E-18,
+  "jacobian_error": 4.50404123719661E-12,
+  "energy_balance_error_W": 3.66644214988554E-12,
+  "solver_angle_difference_rad": 2.4658297509416727E-7,
+  "max_transmission_condition": 16.764323876212671,
+  "max_direct_side_load_N": 1.9479508173142959
+}

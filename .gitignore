@@ -1,0 +1,7 @@
+output/cache/
+*.slxc
+*.asv
+slprj/
+
+# Local recovery archives
+backup/

@@ -1,0 +1,12 @@
+check,passed,seconds
+test_rcflex_mesh_properties,1,0.0257112
+test_spoon_reference,1,0.0174587
+test_rcflex_packaging,1,0.0141836
+test_rcflex_shell_clearance,1,0.1696665
+test_rcflex_front_cap,1,0.1838401
+test_rcflex_spherical_clearance,1,0.2569967
+test_rcflex_physics,1,2.3062736
+test_rcflex_hardware,1,1.7823072
+test_rcflex_translation,1,0.0659802
+test_rcflex_control,1,0.3073291
+test_rcflex_liquid,1,2.931233
