@@ -1,5 +1,8 @@
 function C=rcflex_prepare_control(C)
 % Fixed second-order sections, computed once before starting the controller.
+if isfield(C,'algorithm')&&strcmp(C.algorithm,'ekf_predictive')
+ C=rcflex_intent_ekf_init(C);return
+end
 if strcmp(C.intent_filter,'lowpass')
  C.intent_sos=lowpass(C.intent_hz,C.outer_hz);return
 end
