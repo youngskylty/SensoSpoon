@@ -12,13 +12,8 @@ for food=[.005 .015]
    q=-base(:,[2 1]);qd=-base(:,[4 3]);qdd=-base(:,[6 5]);
    ii=zeros(numel(t),2);sd=ii;stroke=ii;side=ii;
    for k=1:numel(t)
-    L=rcflex_linkage(q(k,:)',h);sd(k,:)=(L.J*qd(k,:)').';stroke(k,:)=L.s.';
-    [M,bias]=rcflex_mass_bias(q(k,:)',qd(k,:)',base(k,1:2)',base(k,3:4)',base(k,5:6)',h,B,base(k,7:15)');
-    torque=M*qdd(k,:)'+bias+h.flexure_stiffness_Nm_rad.*q(k,:)'+h.flexure_damping_Nms_rad*qd(k,:)';
-    friction=h.guide_friction_N*tanh(sd(k,:)'/.001)+h.guide_viscous_Ns_m*sd(k,:)';
-    force=L.J'\torque+friction;K=h.vca_force_constant_N_A*max(1-.27*(L.s/(h.vca_stroke_mm/1000)).^2,.5);
-    ii(k,:)=(force./K).';d=L.slider-L.attach;
-    side(k,:)=abs(force.').*sqrt(sum(d(2:3,:).^2,1))./abs(d(1,:));
+    [iReq,rc]=rcflex_required_current(q(k,:)',qd(k,:)',qdd(k,:)',base(k,1:2)',base(k,3:4)',base(k,5:6)',base(k,7:15)',h,B);
+    ii(k,:)=iReq.';stroke(k,:)=rc.stroke.';side(k,:)=rc.side_load_N.';sd(k,:)=(rc.L.J*qd(k,:)').';
    end
    di=[gradient(ii(:,1),t) gradient(ii(:,2),t)];
    K=h.vca_force_constant_N_A*max(1-.27*(stroke/(h.vca_stroke_mm/1000)).^2,.5);
