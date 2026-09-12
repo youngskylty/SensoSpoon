@@ -49,6 +49,16 @@ Pm=F*P*F'+Qeff;
 z=hand(:);resid=z-E.H*xpred;S=E.H*Pm*E.H'+E.R;K=Pm*E.H'/S;
 x=xpred+K*resid;P=Pm-K*E.H*Pm;P=(P+P')/2;
 
+% Rate-limit omega itself. Any single sample's information about omega is
+% weak (the Jacobian is nearly singular at low amplitude -- e.g. during the
+% startup ramp every test scenario begins with), so an otherwise-plausible
+% Kalman step can occasionally propose an implausibly large jump with no
+% real tremor behind it. A straightforward rate limit (real WFLC/BMFLC
+% frequency-adaptation terms are bounded in practice too) is a simpler and
+% more predictable safeguard than trying to make the gain itself amplitude-
+% aware, and does not perturb the covariance bookkeeping.
+domega=x(idx.omega)-omega;maxStep=C.ekf_omega_rate_Hz_per_s*2*pi*dt;
+x(idx.omega)=omega+max(min(domega,maxStep),-maxStep);
 if x(idx.omega)<E.omega_min||x(idx.omega)>E.omega_max
  x(idx.omega)=min(max(x(idx.omega),E.omega_min),E.omega_max);
  P(idx.omega,:)=0;P(:,idx.omega)=0;P(idx.omega,idx.omega)=E.P0(idx.omega,idx.omega);

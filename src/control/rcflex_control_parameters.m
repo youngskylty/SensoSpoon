@@ -30,6 +30,10 @@ C.ekf_q_omega=2e-2;      % (rad/s)^2 -- frequency drift rate; tuned so a 4->12 H
                          % 20 Hz) still converge to within 0.01 Hz.
 C.ekf_r_meas=(deg2rad(.02))^2;  % attitude estimate noise
 C.ekf_omega_min_Hz=2;C.ekf_omega_max_Hz=25;C.ekf_omega_init_Hz=6;C.ekf_omega_p0_Hz=1.5;
+C.ekf_omega_rate_Hz_per_s=50; % max |domega/dt|; guards against low-amplitude false locks
+                              % without slowing legitimate fast lock (tuned:
+                              % lowest value that still passes the 4-20 Hz
+                              % convergence and chirp-tracking unit tests).
 C.ekf_lead_s=.0025;      % ~2 sample periods @ 800 Hz
 % Trust gate (NIS-based). n_lo/n_hi bracket the expected NIS (=2, measurement dim).
 C.ekf_nis_tau_s=.05;C.ekf_nis_lo=4;C.ekf_nis_hi=25;C.ekf_q_boost=50;
