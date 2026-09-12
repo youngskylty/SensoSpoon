@@ -7,8 +7,8 @@ if nargin<4;mechanicalStep=.0005;end
 Hnom=rcflex_parameters;Bnom=rcflex_body_properties(Hnom);B=rcflex_body_properties(H);
 C=rcflex_calibrate_control(C,Hnom);dt=D.time(2)-D.time(1);n=numel(D.time);outerN=round(1/C.outer_hz/dt);innerN=round(1/C.current_hz/dt);mechN=round(mechanicalStep/dt);logN=round(.001/dt);
 x=zeros(8,1);acc=zeros(2,1);z=[];integ=zeros(2,1);command=zeros(4,1);voltage=zeros(2,1);adc=[0;0;H.bus_voltage_V];
-f=repmat([0;0;0;0;0;9.80665],2,1);measurement=[f;zeros(2,1)];diagnostic=zeros(16,1);
-Y=zeros(ceil(n/logN),26);time=zeros(size(Y,1),1);base=zeros(size(Y,1),15);intent=zeros(size(Y,1),3);logs=zeros(size(Y,1),16);sensors=zeros(size(Y,1),14);count=0;
+f=repmat([0;0;0;0;0;9.80665],2,1);measurement=[f;zeros(2,1)];diagnostic=zeros(24,1);
+Y=zeros(ceil(n/logN),26);time=zeros(size(Y,1),1);base=zeros(size(Y,1),15);intent=zeros(size(Y,1),3);logs=zeros(size(Y,1),24);sensors=zeros(size(Y,1),14);count=0;
 for k=1:n
  t=D.time(k);b=D.base(k,:)';
  if mod(k-1,mechN)==0||mod(k-1,outerN)==0||mod(k-1,logN)==0

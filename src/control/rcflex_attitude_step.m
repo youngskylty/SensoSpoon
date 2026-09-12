@@ -2,9 +2,17 @@ function [z,command,diagnostic]=rcflex_attitude_step(z,sensor,H,B,C)
 % Sensor-only outer loop. No plant truth, base input or future samples.
 % command=[current references(2); estimated back-EMF(2)].
 % State: rotations 1:18; integral 23:24; power/heat 38:41;
-% guarded joints 52:53; IIR sections 61:88; previous desired rotation 91:99.
+% guarded joints 52:53; IIR sections 61:88 (C.algorithm='simple_pid' only);
+% previous desired rotation 91:99; EKF slice 101:283 (x(13) 101:113,
+% P(:)(169) 114:282, nis_bar 283, C.algorithm='ekf_predictive' only);
+% authority manager gamma_auth 284.
 dt=1/C.outer_hz;
-if isempty(z);z=zeros(100,1);z(1:18)=[reshape(eye(3),9,1);reshape(eye(3),9,1)];z(91:99)=reshape(eye(3),9,1);end
+if isempty(z)
+ z=zeros(300,1);z(1:18)=[reshape(eye(3),9,1);reshape(eye(3),9,1)];z(91:99)=reshape(eye(3),9,1);z(284)=1;
+ if isfield(C,'algorithm')&&strcmp(C.algorithm,'ekf_predictive')
+  z(101:283)=[C.ekf.x0;C.ekf.P0(:);C.ekf_nis_lo];
+ end
+end
 R=cell(2,1);omega=zeros(3,2);
 for j=1:2
  ix=(j-1)*9+(1:9);R{j}=reshape(z(ix),3,3);
@@ -17,11 +25,26 @@ end
 Rh=R{1};Rs=R{2};rel=Rh'*Rs;
 q=[atan2(-rel(3,1),rel(1,1));atan2(-rel(2,3),rel(2,2))];
 hand=[atan2(Rh(3,2),Rh(2,2));atan2(Rh(1,3),Rh(1,1))];
-% Causal fixed IIR sections. Coefficients are prepared before execution.
-ref=hand([2 1]);
-for j=1:size(C.intent_sos,1)
- c=C.intent_sos(j,:);ix=60+4*(j-1)+(1:2);input=ref;
- ref=c(1)*input+z(ix);z(ix)=c(2)*input-c(5)*ref+z(ix+2);z(ix+2)=c(3)*input-c(6)*ref;
+% Reference-path branch -- the only place the intent/tremor algorithm
+% choice appears. Everything before this point (attitude) and after it
+% (guard, error, PID, feedforward, allocator) is common to both algorithms.
+if strcmp(C.algorithm,'ekf_predictive')
+ [ekfSlice,refIntent,ekfInfo]=rcflex_intent_ekf_step(z(101:283),hand,C);
+ z(101:283)=ekfSlice;
+ gammaTrust=ekfInfo(3);handRaw=hand([2 1]);
+ blended=gammaTrust*refIntent+(1-gammaTrust)*handRaw;
+ [gammaAuth,iPred]=rcflex_authority_manager(z(284),hand,ekfSlice(1:13),H,B,C);
+ z(284)=gammaAuth;
+ ref=handRaw+gammaAuth*(blended-handRaw);
+ ekfDiag=[ekfInfo(1);ekfInfo(2);gammaTrust;gammaAuth;iPred;0;0;0];
+else
+ % Causal fixed IIR sections. Coefficients are prepared before execution.
+ ref=hand([2 1]);
+ for j=1:size(C.intent_sos,1)
+  c=C.intent_sos(j,:);ix=60+4*(j-1)+(1:2);input=ref;
+  ref=c(1)*input+z(ix);z(ix)=c(2)*input-c(5)*ref+z(ix+2);z(ix+2)=c(3)*input-c(6)*ref;
+ end
+ ekfDiag=zeros(8,1);
 end
 Rd=rx(ref(2))*ry(ref(1));rr=Rh'*Rd;
 qr=[atan2(-rr(3,1),rr(1,1));atan2(-rr(2,3),rr(2,2))];
@@ -67,7 +90,7 @@ end
 sat=norm(A*iref-b)>1;
 if sat;z(23:24)=previousIntegral;end
 command=[iref;K.*sd];
-diagnostic=[q;ref;e;iref;limit;z(38:41);double(sat);cond(L.J)];
+diagnostic=[q;ref;e;iref;limit;z(38:41);double(sat);cond(L.J);ekfDiag];
 end
 function R=increment(v)
 t=norm(v);K=[0 -v(3) v(2);v(3) 0 -v(1);-v(2) v(1) 0];
