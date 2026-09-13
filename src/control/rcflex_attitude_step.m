@@ -3,14 +3,14 @@ function [z,command,diagnostic]=rcflex_attitude_step(z,sensor,H,B,C)
 % command=[current references(2); estimated back-EMF(2)].
 % State: rotations 1:18; integral 23:24; power/heat 38:41;
 % guarded joints 52:53; IIR sections 61:88 (C.algorithm='simple_pid' only);
-% previous desired rotation 91:99; EKF slice 101:283 (x(13) 101:113,
-% P(:)(169) 114:282, nis_bar 283, C.algorithm='ekf_predictive' only);
-% authority manager gamma_auth 284.
+% previous desired rotation 91:99; EKF slice 101:327 (x(13) 101:113,
+% P(:)(169) 114:282, nis_bar 283, frequency-observable state 284:327,
+% C.algorithm='ekf_predictive' only); authority manager gamma_auth 328.
 dt=1/C.outer_hz;
 if isempty(z)
- z=zeros(300,1);z(1:18)=[reshape(eye(3),9,1);reshape(eye(3),9,1)];z(91:99)=reshape(eye(3),9,1);z(284)=1;
+ z=zeros(400,1);z(1:18)=[reshape(eye(3),9,1);reshape(eye(3),9,1)];z(91:99)=reshape(eye(3),9,1);z(328)=1;
  if isfield(C,'algorithm')&&strcmp(C.algorithm,'ekf_predictive')
-  z(101:283)=[C.ekf.x0;C.ekf.P0(:);C.ekf_nis_lo];
+  z(100+(1:C.ekf.s_len))=C.ekf.s0;
  end
 end
 R=cell(2,1);omega=zeros(3,2);
@@ -29,14 +29,15 @@ hand=[atan2(Rh(3,2),Rh(2,2));atan2(Rh(1,3),Rh(1,1))];
 % choice appears. Everything before this point (attitude) and after it
 % (guard, error, PID, feedforward, allocator) is common to both algorithms.
 if strcmp(C.algorithm,'ekf_predictive')
- [ekfSlice,refIntent,ekfInfo]=rcflex_intent_ekf_step(z(101:283),hand,C);
- z(101:283)=ekfSlice;
+ ekfIx=100+(1:C.ekf.s_len);
+ [ekfSlice,refIntent,ekfInfo]=rcflex_intent_ekf_step(z(ekfIx),hand,C);
+ z(ekfIx)=ekfSlice;
  gammaTrust=ekfInfo(3);handRaw=hand([2 1]);
  blended=gammaTrust*refIntent+(1-gammaTrust)*handRaw;
- [gammaAuth,iPred]=rcflex_authority_manager(z(284),hand,ekfSlice(1:13),H,B,C);
- z(284)=gammaAuth;
+ [gammaAuth,iPred]=rcflex_authority_manager(z(328),hand,ekfSlice(1:13),H,B,C);
+ z(328)=gammaAuth;
  ref=handRaw+gammaAuth*(blended-handRaw);
- ekfDiag=[ekfInfo(1);ekfInfo(2);gammaTrust;gammaAuth;iPred;0;0;0];
+ ekfDiag=[ekfInfo(1);ekfInfo(2);gammaTrust;gammaAuth;iPred;ekfInfo(4);ekfInfo(5);0];
 else
  % Causal fixed IIR sections. Coefficients are prepared before execution.
  ref=hand([2 1]);

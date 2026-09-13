@@ -35,6 +35,24 @@ C.ekf_omega_rate_Hz_per_s=50; % max |domega/dt|; guards against low-amplitude fa
                               % lowest value that still passes the 4-20 Hz
                               % convergence and chirp-tracking unit tests).
 C.ekf_lead_s=.0025;      % ~2 sample periods @ 800 Hz
+% Independent tremor-frequency observable (lag-autocorrelation on a high-passed
+% copy of the measurement). Supplies omega information that does NOT come from
+% the joint intent/tremor fit, which is weakly identifiable while intent and
+% tremor ramp together -- see the derivation in rcflex_intent_ekf_step.m.
+C.freq_hp_Hz=3;          % 2-pole highpass: rejects voluntary motion (<2 Hz)
+                         % while passing the whole 4-25 Hz tremor band. The
+                         % estimator is gain-insensitive, so the ~0.64 passband
+                         % gain at 4 Hz costs accuracy only through SNR.
+C.freq_lag_samples=8;    % lag D. omega*D*dt spans 0.20-1.57 rad over 2-25 Hz:
+                         % well conditioned for acos and unambiguous to 50 Hz.
+C.freq_tau_s=.15;        % EWMA window on the correlation statistics. Long
+                         % enough to average measurement noise to nothing,
+                         % short enough that a 2 Hz/s chirp lags by <0.4 Hz.
+C.freq_power_floor_deg=.3;  % confidence half-power point on tremor amplitude.
+                         % Above the intent leakage through the highpass in the
+                         % tremor-free 'intent' scenario, below a 1 deg tremor.
+C.freq_meas_sd_Hz=1;     % pseudo-measurement 1-sigma at full confidence;
+                         % inflated as 1/confidence, rejected out of band.
 % Trust gate (NIS-based). n_lo/n_hi bracket the expected NIS (=2, measurement dim).
 C.ekf_nis_tau_s=.05;C.ekf_nis_lo=4;C.ekf_nis_hi=25;C.ekf_q_boost=50;
 % Predictive authority manager.

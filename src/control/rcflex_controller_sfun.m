@@ -9,14 +9,17 @@ b.RegBlockMethod('PostPropagationSetup',@setup);b.RegBlockMethod('InitializeCond
 b.RegBlockMethod('Outputs',@out);b.RegBlockMethod('Update',@update);
 end
 function setup(b)
-b.NumDworks=1;b.Dwork(1).Name='estimator_and_integral';b.Dwork(1).Dimensions=300;
+b.NumDworks=1;b.Dwork(1).Name='estimator_and_integral';b.Dwork(1).Dimensions=400;
 b.Dwork(1).DatatypeID=0;b.Dwork(1).Complexity='Real';b.Dwork(1).UsedAsDiscState=true;
 end
 function init(b)
 C=b.DialogPrm(3).Data;
-z=zeros(300,1);z(1:18)=[reshape(eye(3),9,1);reshape(eye(3),9,1)];z(91:99)=reshape(eye(3),9,1);z(284)=1;
+% Must mirror rcflex_attitude_step's own z=[] initialisation exactly; the
+% packed EKF initial slice is built once in rcflex_intent_ekf_init (C.ekf.s0)
+% so the two sites cannot drift apart.
+z=zeros(400,1);z(1:18)=[reshape(eye(3),9,1);reshape(eye(3),9,1)];z(91:99)=reshape(eye(3),9,1);z(328)=1;
 if isfield(C,'algorithm')&&strcmp(C.algorithm,'ekf_predictive')
- z(101:283)=[C.ekf.x0;C.ekf.P0(:);C.ekf_nis_lo];
+ z(100+(1:C.ekf.s_len))=C.ekf.s0;
 end
 b.Dwork(1).Data=z;
 end
