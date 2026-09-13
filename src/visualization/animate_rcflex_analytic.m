@@ -23,7 +23,7 @@ footer='Open-loop voltage test: motion comes from the RL circuit and mechanical 
 if strcmp(S.mode,'closed_loop');footer=['Closed loop: dual IMU + current PI. Solved electromechanical motion. Solver: ' strrep(S.solver,'_',' ')];end
 annotation(f,'textbox',[.05 .02 .9 .08],'String',footer, ...
     'EdgeColor','none','FontSize',11,'Color',[.1 .15 .2]);
-if ~isempty(videoFile);writer=VideoWriter(videoFile,'MPEG-4');writer.FrameRate=30;open(writer);cleanup=onCleanup(@()close(writer));end
+if ~isempty(videoFile);writer=VideoWriter(videoFile,'MPEG-4');writer.FrameRate=30;open(writer);cleanup=onCleanup(@()close(writer));frameSize=[];end
 for n=unique(round(linspace(1,numel(S.time),ceil(S.time(end)*30)+1)))
     if ~isgraphics(f);break;end
     q=S.Y(n,1:2)';L=rcflex_linkage(q,H);Rp=ry(q(1));Rs=Rp*rx(q(2));Hb=rx(S.base(n,1))*ry(S.base(n,2));
@@ -40,7 +40,12 @@ for n=unique(round(linspace(1,numel(S.time),ceil(S.time(end)*30)+1)))
     set(status,'String',sprintf('Moticont GVCM-016-019-01M x2 | t = %.2f s\nV = [%+.2f, %+.2f] V    I = [%+.3f, %+.3f] A    pitch / roll = [%+.2f, %+.2f] deg', ...
         S.time(n),S.Y(n,11:12),S.Y(n,5:6),rad2deg(q)));
     drawnow;
-    if ~isempty(videoFile);writeVideo(writer,getframe(f));end
+    if ~isempty(videoFile)
+        frame=getframe(f);
+        if isempty(frameSize);frameSize=size(frame.cdata);
+        elseif ~isequal(size(frame.cdata),frameSize);frame.cdata=imresize(frame.cdata,frameSize(1:2));end
+        writeVideo(writer,frame);
+    end
 end
 if isgraphics(f);name='rcflex_physical_test.png';if strcmp(S.mode,'closed_loop');name='rcflex_control_animation.png';end;exportgraphics(f,project_path('figures',name),'Resolution',150);end
 end
