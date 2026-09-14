@@ -1,17 +1,49 @@
-function [z,command,diagnostic]=rcflex_attitude_step(z,sensor,H,B,C)
+function [z,command,diagnostic]=rcflex_attitude_step(z,sensor,H,B,C,semgBlock)
 % Sensor-only outer loop. No plant truth, base input or future samples.
 % command=[current references(2); estimated back-EMF(2)].
+%
+% semgBlock is OPTIONAL: C.semg.sub x C.semg.nch electrode-referred sEMG
+% samples covering this tick, or omitted/[] for the IMU-only baseline. It is a
+% trailing argument rather than an extension of `sensor` deliberately -- that
+% keeps the 14-wide sensor vector, and therefore every Simulink port width and
+% every existing call site, completely unchanged. The features it produces are
+% published to the diagnostic vector for characterisation and are NOT read by
+% the reference path: sEMG is sensed here, not yet fused.
 % State: rotations 1:18; integral 23:24; power/heat 38:41;
 % guarded joints 52:53; IIR sections 61:88 (C.algorithm='simple_pid' only);
-% previous desired rotation 91:99; EKF slice 101:327 (x(13) 101:113,
-% P(:)(169) 114:282, nis_bar 283, frequency-observable state 284:327,
-% C.algorithm='ekf_predictive' only); authority manager gamma_auth 328.
+% previous desired rotation 91:99; EKF slice 101:100+C.ekf.s_len (x(13)
+% 101:113, P(:)(169) 114:282, nis_bar 283 for the base 13-state filter,
+% C.algorithm='ekf_predictive' only); authority manager gamma_auth at
+% 100+C.ekf.s_len+1, floored at 328 so the base layout is unchanged; sEMG
+% preprocessing state immediately after gamma_auth (C.semg_enabled only).
+if nargin<6;semgBlock=[];end
 dt=1/C.outer_hz;
+% The EKF slice starts at 101 and runs C.ekf.s_len elements, so gamma_auth must
+% sit immediately AFTER it rather than at a hard-coded index: the widened
+% (C.ekf_osc2) filter is longer than the base one and would otherwise overwrite
+% gamma_auth every step, corrupting the authority manager. The max(328,...)
+% floor keeps gamma_auth where it has always been for the base filter.
+gammaIx=328;
+if isfield(C,'ekf')&&isfield(C.ekf,'s_len');gammaIx=max(328,100+C.ekf.s_len+1);end
+semgOn=isfield(C,'semg_enabled')&&C.semg_enabled&&isfield(C,'semg');
+semgIx=[];
+if semgOn;semgIx=gammaIx+(1:C.semg.s_len);end
+nz=max(400,gammaIx);
+if semgOn;nz=max(nz,semgIx(end));end
 if isempty(z)
- z=zeros(400,1);z(1:18)=[reshape(eye(3),9,1);reshape(eye(3),9,1)];z(91:99)=reshape(eye(3),9,1);z(328)=1;
+ z=zeros(nz,1);z(1:18)=[reshape(eye(3),9,1);reshape(eye(3),9,1)];z(91:99)=reshape(eye(3),9,1);z(gammaIx)=1;
  if isfield(C,'algorithm')&&strcmp(C.algorithm,'ekf_predictive')
   z(100+(1:C.ekf.s_len))=C.ekf.s0;
  end
+ if semgOn;z(semgIx)=C.semg.s0;end
+end
+% sEMG runs before the reference branch so its features are available to a
+% future estimator without moving anything. Today nothing downstream reads
+% semgFeat -- it goes to the diagnostic vector only.
+semgFeat=zeros(8,1);
+if semgOn&&~isempty(semgBlock)
+ [semgState,feat]=rcflex_semg_preprocess(z(semgIx),semgBlock,C);
+ z(semgIx)=semgState;semgFeat=feat;
 end
 R=cell(2,1);omega=zeros(3,2);
 for j=1:2
@@ -34,8 +66,8 @@ if strcmp(C.algorithm,'ekf_predictive')
  z(ekfIx)=ekfSlice;
  gammaTrust=ekfInfo(3);handRaw=hand([2 1]);
  blended=gammaTrust*refIntent+(1-gammaTrust)*handRaw;
- [gammaAuth,iPred]=rcflex_authority_manager(z(328),hand,ekfSlice(1:13),H,B,C);
- z(328)=gammaAuth;
+ [gammaAuth,iPred]=rcflex_authority_manager(z(gammaIx),hand,ekfSlice(1:13),H,B,C);
+ z(gammaIx)=gammaAuth;
  ref=handRaw+gammaAuth*(blended-handRaw);
  ekfDiag=[ekfInfo(1);ekfInfo(2);gammaTrust;gammaAuth;iPred;ekfInfo(4);ekfInfo(5);0];
 else
@@ -91,7 +123,9 @@ end
 sat=norm(A*iref-b)>1;
 if sat;z(23:24)=previousIntegral;end
 command=[iref;K.*sd];
-diagnostic=[q;ref;e;iref;limit;z(38:41);double(sat);cond(L.J);ekfDiag];
+% Width 32: 16 baseline + 8 EKF/authority + 8 sEMG. Both trailing groups read
+% zero when their subsystem is off, so downstream indexing is unaffected.
+diagnostic=[q;ref;e;iref;limit;z(38:41);double(sat);cond(L.J);ekfDiag;semgFeat];
 end
 function R=increment(v)
 t=norm(v);K=[0 -v(3) v(2);v(3) 0 -v(1);-v(2) v(1) 0];

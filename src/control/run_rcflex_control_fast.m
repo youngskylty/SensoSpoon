@@ -7,15 +7,26 @@ if nargin<4;mechanicalStep=.0005;end
 Hnom=rcflex_parameters;Bnom=rcflex_body_properties(Hnom);B=rcflex_body_properties(H);
 C=rcflex_calibrate_control(C,Hnom);dt=D.time(2)-D.time(1);n=numel(D.time);outerN=round(1/C.outer_hz/dt);innerN=round(1/C.current_hz/dt);mechN=round(mechanicalStep/dt);logN=round(.001/dt);
 x=zeros(8,1);acc=zeros(2,1);z=[];integ=zeros(2,1);command=zeros(4,1);voltage=zeros(2,1);adc=[0;0;H.bus_voltage_V];
-f=repmat([0;0;0;0;0;9.80665],2,1);measurement=[f;zeros(2,1)];diagnostic=zeros(24,1);
-Y=zeros(ceil(n/logN),26);time=zeros(size(Y,1),1);base=zeros(size(Y,1),15);intent=zeros(size(Y,1),3);logs=zeros(size(Y,1),24);sensors=zeros(size(Y,1),14);count=0;
+f=repmat([0;0;0;0;0;9.80665],2,1);measurement=[f;zeros(2,1)];diagnostic=zeros(32,1);
+% sEMG block indexing. The scenario carries its own 4 kHz stream; because that
+% rate is an exact integer multiple of the 800 Hz outer loop, tick j consumes
+% samples (j-1)*sub+1 : j*sub with no resampling and no accumulated drift.
+semgOn=isfield(C,'semg_enabled')&&C.semg_enabled&&isfield(C,'semg')&&~isempty(D.semg);
+semgSub=0;semgTick=0;
+if semgOn;semgSub=C.semg.sub;end
+Y=zeros(ceil(n/logN),26);time=zeros(size(Y,1),1);base=zeros(size(Y,1),15);intent=zeros(size(Y,1),3);logs=zeros(size(Y,1),32);sensors=zeros(size(Y,1),14);count=0;
 for k=1:n
  t=D.time(k);b=D.base(k,:)';
  if mod(k-1,mechN)==0||mod(k-1,outerN)==0||mod(k-1,logN)==0
   [dx,y]=rcflex_physics(x,[b(1:6);voltage;b(7:15)],H,B,'voltage');acc=dx(3:4);
  end
  if mod(k-1,outerN)==0
-  [z,command,diagnostic]=rcflex_attitude_step(z,measurement,Hnom,Bnom,C);
+  semgBlock=[];
+  if semgOn
+   semgTick=semgTick+1;ixEmg=(semgTick-1)*semgSub+(1:semgSub);
+   if ixEmg(end)<=size(D.semg,1);semgBlock=D.semg(ixEmg,:);end
+  end
+  [z,command,diagnostic]=rcflex_attitude_step(z,measurement,Hnom,Bnom,C,semgBlock);
   truth=rcflex_sensor_truth(y,b,H);[m,f]=rcflex_imu_sample(truth,f,t,H,C.seed);
   measurement=[m;round(x(5:6)/C.current_quantum)*C.current_quantum];
  end

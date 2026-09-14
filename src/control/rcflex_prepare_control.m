@@ -1,5 +1,9 @@
 function C=rcflex_prepare_control(C)
 % Fixed second-order sections, computed once before starting the controller.
+% The sEMG chain is prepared independently of the intent algorithm: sEMG is a
+% sensing stage, so it is available to either controller and gates only on
+% C.semg_enabled.
+if isfield(C,'semg_enabled')&&C.semg_enabled;C=rcflex_semg_init(C);end
 if isfield(C,'algorithm')&&strcmp(C.algorithm,'ekf_predictive')
  C=rcflex_intent_ekf_init(C);return
 end

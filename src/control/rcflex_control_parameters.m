@@ -35,24 +35,99 @@ C.ekf_omega_rate_Hz_per_s=50; % max |domega/dt|; guards against low-amplitude fa
                               % lowest value that still passes the 4-20 Hz
                               % convergence and chirp-tracking unit tests).
 C.ekf_lead_s=.0025;      % ~2 sample periods @ 800 Hz
-% Independent tremor-frequency observable (lag-autocorrelation on a high-passed
-% copy of the measurement). Supplies omega information that does NOT come from
-% the joint intent/tremor fit, which is weakly identifiable while intent and
-% tremor ramp together -- see the derivation in rcflex_intent_ekf_step.m.
-C.freq_hp_Hz=3;          % 2-pole highpass: rejects voluntary motion (<2 Hz)
-                         % while passing the whole 4-25 Hz tremor band. The
-                         % estimator is gain-insensitive, so the ~0.64 passband
-                         % gain at 4 Hz costs accuracy only through SNR.
-C.freq_lag_samples=8;    % lag D. omega*D*dt spans 0.20-1.57 rad over 2-25 Hz:
-                         % well conditioned for acos and unambiguous to 50 Hz.
-C.freq_tau_s=.15;        % EWMA window on the correlation statistics. Long
-                         % enough to average measurement noise to nothing,
-                         % short enough that a 2 Hz/s chirp lags by <0.4 Hz.
-C.freq_power_floor_deg=.3;  % confidence half-power point on tremor amplitude.
-                         % Above the intent leakage through the highpass in the
-                         % tremor-free 'intent' scenario, below a 1 deg tremor.
-C.freq_meas_sd_Hz=1;     % pseudo-measurement 1-sigma at full confidence;
-                         % inflated as 1/confidence, rejected out of band.
+% --- Optional second independent tremor oscillator (ekf_predictive only) -----
+% The base model carries two harmonics that share one omega (h=1 at omega,
+% h=2 at 2*omega), so it spans {F, 2F} only. Benchmark scenarios 'mixed' and
+% 'irregular' superimpose components at F, F-1 and 3 Hz on the pitch axis;
+% the off-harmonic content is unmodelled and is absorbed by whichever states
+% have the freedom to take it -- in practice the near-constant-velocity intent
+% states, which then pass genuine tremor through to the reference as if it
+% were voluntary motion. Setting ekf_osc2=true appends a second oscillator
+% with its OWN frequency state (states 14:18), giving that content a home so
+% it can no longer be mistaken for intent. States 1:13 are unchanged, so
+% ekf_osc2=false reproduces the original 13-state filter exactly.
+C.ekf_osc2=false;        % single switch: false = 13-state base, true = 18-state widened
+C.ekf_q_tremor3=1e-5;    % rad^2 -- second-oscillator amplitude drift
+C.ekf_q_omega2=2e-2;     % (rad/s)^2 -- second-oscillator frequency drift
+C.ekf_omega2_min_Hz=2;C.ekf_omega2_max_Hz=25;
+C.ekf_omega2_init_Hz=3;C.ekf_omega2_p0_Hz=1.5;
+C.ekf_omega2_rate_Hz_per_s=50;
+% Presence gate for the second oscillator. Without it, omega2 has no
+% independent observable of its own and is free to rail against its bound and manufacture a
+% phantom low-frequency component out of voluntary intent -- measured at
+% 1.1-2.5 deg on the 'combined' scenario, larger than the real 1 deg tremor.
+% The gate measures power in the low tremor band only, and when that power is
+% absent it both starves the oscillator's process noise and pulls its
+% amplitude states to zero, so the filter degrades gracefully to the 13-state
+% behaviour instead of inventing signal.
+C.ekf_gate_hi_Hz=20;     % 2-pole lowpass corner on the residual. The gate asks
+                         % "what does the base model fail to explain", so it must
+                         % pass the whole tremor band (roll's unmodelled content
+                         % sits at 10-12 Hz, pitch's at 3 Hz); the lowpass is here
+                         % only to keep measurement noise out of the power estimate.
+C.ekf_gate_tau_s=.25;    % EWMA window on band power
+C.ekf_gate_floor_deg=.08;% confidence half-power point on low-band amplitude
+C.ekf_gate_sd_deg=.004;  % 1-sigma of the "a3 is zero" pseudo-measurement at
+                         % zero confidence; inflated by 1/(1-conf) as the gate opens
+% --- Surface EMG sensing (staged: sensed and characterised, NOT yet fused) ---
+% Single switch. false = the IMU-only baseline, byte-identical to the system
+% before sEMG existed: no sEMG is generated, no extra state is carried, and the
+% sEMG diagnostic slots read zero. true = the sEMG stream is generated with the
+% scenario, preprocessed causally in the controller, and published to the
+% diagnostic vector for characterisation -- but it still does NOT influence the
+% reference, the EKF measurement model or the state vector. Deciding how it
+% should influence the estimator is the NEXT stage, and that decision is meant
+% to be made from the characterisation evidence rather than assumed now.
+C.semg_enabled=false;
+C.semg_source='synthetic';  % 'synthetic' | 'file' | 'device'. The one place the
+                         % raw stream comes from; see rcflex_semg_source.m for
+                         % the contract every source must satisfy. Only
+                         % 'synthetic' is implemented -- the other two are
+                         % declared so the seam exists and the eventual loader
+                         % and physical front end drop in without touching the
+                         % preprocessing or feature pipeline.
+C.semg_hz=4000;          % 5 x C.outer_hz exactly. The integer ratio is the
+                         % whole synchronisation strategy: every 800 Hz control
+                         % tick contains exactly 5 sEMG samples, so the streams
+                         % are aligned by construction and never need resampling
+                         % or timestamp matching. rcflex_semg_init.m asserts it.
+C.semg_channels=4;       % [roll agonist, roll antagonist, pitch agonist, pitch antagonist]
+% Physiology of the synthetic source (rcflex_semg_truth.m).
+C.semg_emd_s=.040;       % electromechanical delay: EMG LEADS motion by 30-50 ms
+                         % (Cavanagh & Komi 1979). The single property that makes
+                         % sEMG worth adding, so it is modelled explicitly.
+C.semg_intent_ref_deg=5; % voluntary angle giving unit voluntary drive
+C.semg_tremor_ref_deg=1;C.semg_tremor_ref_Hz=8;  % tremor giving unit tremor drive
+C.semg_intent_gain=1;C.semg_tremor_gain=1;
+C.semg_cocontraction=.05;C.semg_cocontraction_gain=.15;
+C.semg_activation_max=1;
+C.semg_mvc_V=1.5e-3;     % electrode-referred amplitude at full activation
+C.semg_band_lo_Hz=20;C.semg_band_hi_Hz=450;  % motor-unit interference bandwidth
+% Instrumentation (rcflex_semg_sample.m).
+C.semg_offset_V=15e-3;   % electrode half-cell offset, >>signal: forces the highpass
+C.semg_mains_Hz=50;C.semg_mains_V=.2e-3;     % NZ mains, inside the EMG band
+C.semg_artifact_V=.12e-3;C.semg_artifact_Hz_range=[2 9];
+                         % motion artefact placed deliberately IN the tremor band,
+                         % so characterisation cannot flatter the signal by
+                         % measuring an artefact-free case.
+C.semg_noise_V=8e-6;     % amplifier/electrode broadband floor
+C.semg_ac_couple_Hz=10;  % analog highpass AHEAD of the gain stage. Without it
+                         % the electrode offset alone demands ~7.5 V of a 1.65 V
+                         % converter and rails the channel; see
+                         % rcflex_semg_sample.m.
+C.semg_gain=200;         % Set from the PEAK, not the rms: surface EMG is an
+                         % interference pattern with a crest factor of 7-10, so
+                         % a gain chosen from the rms clips the peaks. The bound
+                         % is 1.65 V / 7.13 mV worst-case peak = 231; 200 leaves
+                         % 1.6-7.5 dB of headroom with zero clipping across all
+                         % scenario/seed combinations, measured by
+                         % rcflex_semg_quality. See docs/SEMG_SUBSYSTEM.md 1.4.
+C.semg_adc_range_V=1.65;C.semg_adc_bits=12;
+% Causal preprocessing (rcflex_semg_init.m / rcflex_semg_preprocess.m).
+C.semg_hp_Hz=20;         % must lead the chain: removes the half-cell offset
+C.semg_notch_bw_Hz=4;    % mains notch width
+C.semg_env_Hz=3;         % linear-envelope lowpass -> voluntary effort level
+C.semg_burst_band_Hz=[2 20]; % envelope bandpass -> rhythmic tremor bursting
 % Trust gate (NIS-based). n_lo/n_hi bracket the expected NIS (=2, measurement dim).
 C.ekf_nis_tau_s=.05;C.ekf_nis_lo=4;C.ekf_nis_hi=25;C.ekf_q_boost=50;
 % Predictive authority manager.
