@@ -1,4 +1,4 @@
-function R=validate_rcflex_semg_dataset(dataset,C,writeOutputs)
+function [R,Dg]=validate_rcflex_semg_dataset(dataset,C,writeOutputs)
 %VALIDATE_RCFLEX_SEMG_DATASET Run the six real-data stages, in order.
 % The standalone real-sEMG validation gate. It answers one question -- is this
 % signal worth fusing with the IMU? -- and it answers it BEFORE any estimator
@@ -8,7 +8,22 @@ function R=validate_rcflex_semg_dataset(dataset,C,writeOutputs)
 % dataset : a struct or .mat path meeting rcflex_semg_dataset_spec, OR a
 %           scenario struct from rcflex_control_case (so the synthetic source
 %           can be run through the identical gate as a control).
-% R       : table of stage / status / value / threshold / note.
+% R       : table of stage / status / value / threshold / note. Always the six
+%           GATE stages, in order, and nothing else -- diagnostics never appear
+%           here, so a row index is a stable reference to a stage.
+% Dg      : diagnostics that are reported but do NOT gate. Carries the stage 3
+%           per-segment detail (every segment's signed r, |r| and cross-
+%           correlation peak lag) and stage 3b coactivation_corr.
+%
+% STAGE 3 AND STAGE 3b ARE DIFFERENT PHYSICAL QUANTITIES.
+%   stage 3  raw band-limited waveform correlation, zero lag
+%            -> acquisition/electrical cross-talk. GATED.
+%   stage 3b envelope correlation within a condition (coactivation_corr)
+%            -> physiological agonist/antagonist co-activation. DIAGNOSTIC.
+% Envelope correlation must never be used as the cross-talk gate: the synthetic
+% source generates its channels INDEPENDENTLY -- zero cross-talk by
+% construction -- and still shows envelope |r| ~ 0.8, because both channels
+% share the same activation drive.
 %
 % Stages run in the documented order, and each reports one of:
 %   PASS     criterion met
@@ -57,21 +72,46 @@ else
 end
 
 % =========================================================================
-% 3. Paired-channel cross-talk
+% 3. Raw-waveform cross-talk between the paired channels        [GATE]
 % =========================================================================
-% The largest untested assumption in the design: the synthetic source generates
-% channels independently, so it assumes ZERO cross-talk, and the whole
-% agonist/antagonist feature layout rests on reciprocal activation. Forearm
-% flexors and extensors are closely packed, so this is where the real signal is
-% most likely to disappoint.
-xt=zeros(2,1);
-for ax=1:2
- a=env(:,2*ax-1);b=env(:,2*ax);
- if std(a)<eps||std(b)<eps;xt(ax)=NaN;else;xt(ax)=corr(a,b);end
+% WHAT THIS MEASURES: acquisition-side ELECTRICAL cross-talk -- the same motor
+% unit action potentials reaching both electrodes of a pair by volume
+% conduction, plus whatever common-mode the bipolar montage failed to reject.
+% Volume conduction is quasi-static at EMG frequencies, so genuine cross-talk
+% appears in the RAW waveform at ZERO LAG. That is what is gated here.
+%
+% WHAT IT DELIBERATELY DOES NOT MEASURE: physiological co-activation. Two
+% muscles driven together have correlated ENVELOPES while their raw interference
+% patterns stay independent, because their motor unit pools are independent.
+% Envelope correlation therefore measures shared neural drive, not recording
+% independence, and it is reported separately as stage 3b. Do not conflate them.
+%
+% WHY CONDITIONS ARE NOT POOLED: flexion, extension and rest carry relationships
+% of opposite sign, so one correlation over a whole multi-condition record
+% cancels to near zero regardless of the underlying cross-talk. Each isolated
+% contraction segment is scored on its own and the WORST case gates, because
+% cross-talk is a property of electrode placement and a single badly sited pair
+% breaks the agonist/antagonist feature layout that a median would hide.
+%
+% THE THRESHOLD IS PROVISIONAL. 0.30 is an engineering gate derived from the
+% distance-decay structure of volume conduction and the residual common-mode
+% floor of a shared-reference montage; it is NOT a clinically established
+% universal cross-talk limit. Every segment's value is reported so it can be
+% reassessed against our own recordings. It must not be retuned to make a
+% dataset pass.
+xtThresh=0.30;
+[segs,why3]=isolated_segments(labels,tRaw);
+S3=stage3_segments(raw,tRaw,env,tTick,segs,C);
+if isempty(S3)
+ if isempty(why3);why3='no isolated segment yielded two non-degenerate channels';end
+ worst=NaN;med=NaN;
+ rows(end+1,:)={'3 raw cross-talk |r|','SKIPPED',NaN,xtThresh,why3};
+else
+ av=[S3.abs_r];worst=max(av);med=median(av);
+ rows(end+1,:)={'3 raw cross-talk |r|',stat(worst<xtThresh),worst,xtThresh,...
+  sprintf('worst of %d isolated segment-axes, median %.3f; zero-lag raw |r|; PROVISIONAL gate, not a clinical limit',...
+  numel(S3),med)};
 end
-worst=max(abs(xt));
-rows(end+1,:)={'3 paired cross-talk |r|',stat(worst<0.6),worst,0.6,...
- sprintf('roll %.2f, pitch %.2f; high r collapses the reciprocal-activation assumption',xt(1),xt(2))};
 
 % =========================================================================
 % 4. sEMG lead over the mechanical tremor
@@ -126,10 +166,37 @@ end
 
 R=cell2table(rows,'VariableNames',{'stage','status','value','threshold','note'});
 
+% Diagnostics. Reported, never gated -- see the header note on stage 3 vs 3b.
+Dg=struct('stage3_threshold',xtThresh,'stage3_worst',worst,'stage3_median',med,...
+ 'stage3_segments',seg_table(S3),'coactivation',coact_summary(S3));
+
 fprintf('\n=== Real-sEMG validation: %s ===\n',describe(meta));
 disp(R(:,{'stage','status','value','threshold'}));
 for k=1:height(R)
  fprintf('  %-32s %s\n',R.stage{k},R.note{k});
+end
+
+if ~isempty(S3)
+ fprintf('\n-- stage 3 detail: raw zero-lag |r| per isolated segment (GATE) --\n');
+ disp(Dg.stage3_segments);
+ fprintf('  worst-case |r| %.3f (gates, threshold %.2f provisional), median |r| %.3f\n',...
+  worst,xtThresh,med);
+ % Only worth flagging where the correlation is substantial enough for its peak
+ % to mean anything: on a near-zero correlation the peak lag is just noise, and
+ % warning about it would train the reader to ignore the warning.
+ lg=[S3.peak_lag_ms];av=[S3.abs_r];
+ odd=abs(lg)>1&av>=0.1;
+ if any(odd)
+  fprintf(['  [!] %d of %d segment-axes with |r| >= 0.1 peak away from zero lag (max |lag| %.1f ms).\n' ...
+           '      Correlation peaking off zero lag is NOT volume-conducted cross-talk;\n' ...
+           '      do not reinterpret it as such. The gate uses zero lag regardless.\n'],...
+   nnz(odd),numel(lg),max(abs(lg(odd))));
+ end
+ fprintf('\n-- stage 3b: agonist/antagonist co-activation (DIAGNOSTIC, does not gate) --\n');
+ ca=Dg.coactivation;
+ fprintf('  coactivation_corr  roll   median %s   pitch median %s   overall |r| median %s\n',...
+  num2str(ca.roll_median,'%.3f'),num2str(ca.pitch_median,'%.3f'),num2str(ca.abs_median,'%.3f'));
+ fprintf('  Envelope correlation measures shared neural drive, NOT cross-talk.\n');
 end
 nf=sum(strcmp(R.status,'FAIL'));ns=sum(strcmp(R.status,'SKIPPED'));
 fprintf('\n%d passed, %d failed, %d skipped.\n',sum(strcmp(R.status,'PASS')),nf,ns);
@@ -145,6 +212,12 @@ end
 if writeOutputs
  out=project_path('results','semg_dataset_validation.csv');
  writetable(R,out);fprintf('Wrote %s\n',out);
+ if ~isempty(S3)
+  % Per-segment detail is written out so the provisional 0.30 gate can be
+  % reassessed later against our own recordings without re-deriving it.
+  out3=project_path('results','semg_stage3_segments.csv');
+  writetable(Dg.stage3_segments,out3);fprintf('Wrote %s\n',out3);
+ end
 end
 end
 % -------------------------------------------------------------------------
@@ -176,6 +249,93 @@ hasT=any(abs(D.tremor(half,1:2))>deg2rad(0.05),'all');
 hasI=any(abs(D.intent(half,1:2))>deg2rad(0.05),'all');
 if hasT&&hasI;cls='both';elseif hasT;cls='tremor';elseif hasI;cls='intent';else;cls='rest';end
 L=struct('t_start',t(1)+1.5,'t_end',t(end),'class',cls);
+end
+function [segs,why]=isolated_segments(L,tRaw)
+%ISOLATED_SEGMENTS Valid isolated single-muscle contraction windows for stage 3.
+% Per docs/SEMG_SUBSYSTEM.md 6.3 the cued "isolated flexion, then isolated
+% extension" trials are the ones logged with class 'intent'. Those are the only
+% segments that isolate cross-talk: one muscle of the pair should be silent, so
+% whatever appears in its channel arrives by some route other than its own motor
+% units. 'rest' carries no signal to correlate, and 'tremor'/'both' are not
+% isolated contractions, so neither can score this stage.
+%
+% The first SKIP seconds of every segment are discarded, excluding the
+% contraction ramp and any filter transient at a trial join.
+segs=struct('t_start',{},'t_end',{},'class',{});
+why='needs labels with at least one isolated contraction segment (class ''intent'')';
+if isempty(L)
+ why='needs labels; stage 3 scores isolated contraction segments (class ''intent'') only';
+ return
+end
+if istable(L);L=table2struct(L);end
+SKIP=1.5;MINLEN=0.25;
+for k=1:numel(L)
+ if ~strcmpi(char(L(k).class),'intent');continue;end
+ a=max(L(k).t_start+SKIP,tRaw(1));b=min(L(k).t_end,tRaw(end));
+ if b-a<MINLEN;continue;end
+ segs(end+1)=struct('t_start',a,'t_end',b,'class',char(L(k).class)); %#ok<AGROW>
+end
+if ~isempty(segs);why='';end
+end
+function S3=stage3_segments(raw,tRaw,env,tTick,segs,C)
+%STAGE3_SEGMENTS Per-segment, per-axis raw cross-talk and co-activation.
+% Returns one row per (isolated segment x axis). raw_r is the GATED quantity:
+% zero-lag Pearson correlation of the band-limited raw waveforms. peak_lag_ms
+% and coactivation_corr are diagnostics carried alongside it, never gated.
+S3=struct('segment',{},'class',{},'axis',{},'t_start',{},'t_end',{},...
+ 'raw_r',{},'abs_r',{},'peak_lag_ms',{},'coactivation_corr',{});
+if isempty(segs);return;end
+rawBL=bandlimit_raw(raw,C);
+maxLagS=max(1,round(0.020*C.semg_hz));   % +/-20 ms is ample for volume conduction
+axName={'roll','pitch'};
+for k=1:numel(segs)
+ mr=tRaw>=segs(k).t_start&tRaw<=segs(k).t_end;
+ me=tTick>=segs(k).t_start&tTick<=segs(k).t_end;
+ for ax=1:2
+  a=rawBL(mr,2*ax-1);b=rawBL(mr,2*ax);
+  if numel(a)<8||std(a)<eps||std(b)<eps;continue;end
+  r=corr(a,b);                                  % zero lag -- this is the gate
+  [c,lg]=xcorr(detrend(a),detrend(b),maxLagS,'normalized');
+  [~,j]=max(abs(c));lagMs=1000*lg(j)/C.semg_hz; % diagnostic only
+  ca=NaN;
+  if nnz(me)>2
+   ea=env(me,2*ax-1);eb=env(me,2*ax);
+   if std(ea)>eps&&std(eb)>eps;ca=corr(ea,eb);end
+  end
+  S3(end+1)=struct('segment',k,'class',segs(k).class,'axis',axName{ax},...
+   't_start',segs(k).t_start,'t_end',segs(k).t_end,...
+   'raw_r',r,'abs_r',abs(r),'peak_lag_ms',lagMs,'coactivation_corr',ca); %#ok<AGROW>
+ end
+end
+end
+function y=bandlimit_raw(x,C)
+%BANDLIMIT_RAW Restrict to the pipeline's EMG band before correlating.
+% Zero-phase, so the lag diagnostic is not biased by the filter itself. This is
+% offline validation, not the causal control path.
+fs=C.semg_hz;wn=[C.semg_band_lo_Hz C.semg_band_hi_Hz]/(fs/2);
+wn(2)=min(wn(2),0.99);
+[b,a]=butter(4,wn,'bandpass');
+y=filtfilt(b,a,x);
+end
+function T=seg_table(S3)
+if isempty(S3)
+ T=cell2table(cell(0,9),'VariableNames',{'segment','class','axis','t_start',...
+  't_end','raw_r','abs_r','peak_lag_ms','coactivation_corr'});
+else
+ T=struct2table(S3,'AsArray',true);
+end
+end
+function s=coact_summary(S3)
+%COACT_SUMMARY Stage 3b. Envelope correlation = physiological co-activation.
+% Reported per axis and overall. This is NOT cross-talk and never gates.
+s=struct('roll_median',NaN,'pitch_median',NaN,'abs_median',NaN,'n',0);
+if isempty(S3);return;end
+ca=[S3.coactivation_corr];ax=string({S3.axis});
+s.n=nnz(isfinite(ca));
+if s.n==0;return;end
+s.roll_median=median(ca(ax=="roll"&isfinite(ca)));
+s.pitch_median=median(ca(ax=="pitch"&isfinite(ca)));
+s.abs_median=median(abs(ca(isfinite(ca))));
 end
 function [ixT,ixQ,why]=tremor_segments(L,tTick)
 % Tremor-bearing samples versus tremor-free ones.
