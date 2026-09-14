@@ -167,11 +167,15 @@ sensor module that outputs a pre-rectified envelope (several hobby modules do by
 destroys the burst feature, because rectification must happen after the mains notch and at
 full bandwidth.
 
-> **Gap:** the anti-alias filter is a hardware requirement with **no counterpart in the
-> model**. `rcflex_semg_sample.m` models AC coupling and the ADC but no anti-alias stage,
-> because the synthetic truth is band-limited to 450 Hz by construction and has nothing to
-> alias. Real EMG has content above 450 Hz and the amplifier contributes wideband noise. See
-> §4.2.
+> **Modelled.** `rcflex_semg_sample.m` now implements the anti-alias stage: a 2-pole
+> Butterworth at `C.semg_aa_Hz` = 480 Hz, applied after the gain stage and before sampling.
+>
+> For it to mean anything, the analogue domain is modelled at `C.semg_hz * C.semg_oversample`
+> = 16 kHz and decimated to 4 kHz *after* the filter. Generating straight at 4 kHz would have
+> assumed the band limiting this stage exists to enforce, leaving a decorative block that
+> could never be shown to earn its place. Measured effect of enabling it, on the `combined`
+> scenario: out-of-band residual **8147 → 3126 nV/√Hz** (−8.3 dB) and in-band power fraction
+> **0.756 → 0.908**.
 
 ### 1.8 Synchronisation requirements
 
@@ -345,7 +349,7 @@ recording from a person, including your own arm.
 | `C.semg_ac_couple_Hz = 10` | AC coupling **before** gain | ✅ modelled |
 | `C.semg_gain = 200` | analogue gain | ✅ fixed; zero clipping, 1.6–7.5 dB headroom |
 | AC-coupling settled at start | front end powered up before capture | ✅ fixed; see §1.4 |
-| — | **analogue anti-alias filter** | ❌ **§4.2 — absent from the model** |
+| `C.semg_aa_Hz`, `C.semg_aa_poles` | analogue anti-alias filter | ✅ modelled, with a 4× oversampled analogue domain so it has real out-of-band content to remove |
 | `C.semg_adc_bits/_range_V` | ADC | ✅ modelled, with saturation |
 | `C.semg_hz`, `C.semg.sub` | sample clock and tick alignment | ✅ modelled and asserted |
 | `rcflex_semg_source.m` | the acquisition boundary | ✅ seam exists; `'device'` not implemented |
@@ -363,17 +367,21 @@ class of acquisition defect, so such defects have to be caught by an explicit ch
 than by noticing bad results. That is what `rcflex_semg_quality` is for, and it is why §5.1
 runs first on any real recording.
 
-### 4.2 Missing anti-alias stage
+### 4.2 Anti-alias stage — resolved
 
-`rcflex_semg_sample.m` has no anti-alias filter because the synthetic truth is band-limited
-to 450 Hz and nothing can alias. Real acquisition can and will. Consequence: the model
-currently cannot show what aliasing would do to the features, so it cannot be used to
-justify skipping the analogue filter. Adding a 2-pole 480 Hz stage before the ADC in
-`rcflex_semg_sample.m` would close this and is cheap; it is not required until real data
-arrives, but the hardware requirement stands regardless.
+The chain in `rcflex_semg_sample.m` is now, in physical order:
 
-`rcflex_semg_quality`'s `oob_nV_rtHz` column is the field diagnostic for this: on real data,
-a value far above the amplifier's datasheet noise density means the anti-alias filter is too
+```
+electrode -> corruptions -> AC coupling -> gain -> anti-alias -> decimate -> quantise/clip
+```
+
+Two of those orderings are requirements, not preferences: AC coupling before gain (§1.5),
+and anti-aliasing before sampling. The analogue domain is modelled at 4× the final rate so
+the filter has genuine content above the 2 kHz final Nyquist to remove — the truth
+generator's 450 Hz band limit is only 2-pole, and the corruption noise is white.
+
+`rcflex_semg_quality`'s `oob_nV_rtHz` column remains the field diagnostic: on real data, a
+value far above the amplifier's datasheet noise density means the anti-alias filter is too
 shallow.
 
 ### 4.3 What is already source-agnostic
@@ -470,6 +478,100 @@ change the estimator last.
 
 None of these carry synchronised IMU tremor data with intent labels, which is why §5.5 and
 §5.7 ultimately need our own recording.
+
+---
+
+## 6. Running a real dataset through the pipeline
+
+The recorded-data path is implemented and tested; only the data is missing.
+
+### 6.1 Dataset format
+
+Defined in one place — `rcflex_semg_dataset_spec.m`. Call it with no arguments to get the
+contract as a struct, so a recording or conversion script can target it directly.
+
+**Required**
+
+| Field | Type | Notes |
+|---|---|---|
+| `semg` | n × 4 double | **Electrode-referred volts.** Not ADC counts, not gain-included. Convert with `volts = counts * (adc_range/2^bits) / gain` |
+| `fs` | scalar | Hz. Must be ≥ 900 Hz (= 2 × 450); anything else is regridded to 4 kHz by the loader |
+
+Channel order is `[roll agonist, roll antagonist, pitch agonist, pitch antagonist]`
+= `[FCR, ECRL/B, FCU, ECU]` for the placement in §1.9.
+
+**Optional — each unlocks specific validation stages**
+
+| Field | Unlocks | Notes |
+|---|---|---|
+| `imu_accel` (m × 2), `imu_fs` | stages 4, 5 | Tremor **acceleration**, [roll pitch]. Units arbitrary but consistent — both stages are scale-invariant |
+| `labels` (`t_start`, `t_end`, `class`) | stages 2, 6 | `class` ∈ `rest` / `tremor` / `intent` / `both` |
+| `t0`, `channels`, `subject`, `session`, `device`, `notes` | — | Provenance |
+
+The spec actively rejects the mistakes a real dataset will actually make: a transposed
+matrix, gain-included or ADC-count units (peak |semg| ≥ 0.1 V), the wrong channel count, a
+sample rate below the band requirement, and invalid label classes. Each is covered by
+`tests/test_rcflex_semg_dataset.m`.
+
+### 6.2 Minimum useful dataset
+
+`semg` + `fs` alone runs **stages 1 and 3**. Adding `labels` with at least one tremor-bearing
+and one tremor-free segment adds the **stage 2 go/no-go**. Adding `imu_accel` adds **stages 4
+and 5**, which are the two that decide whether sEMG carries anything the IMU does not.
+
+Nothing here needs a full labelled corpus to start. A public dataset with no IMU and no
+labels still answers the two most likely reasons for early failure — bad acquisition and
+cross-talk.
+
+### 6.3 Recording protocol
+
+Stages 2 and 6 compare conditions, so a single continuous recording of one condition cannot
+answer them — the gate reports SKIPPED rather than inventing a comparison. Record **cued
+trials in one continuous session** with boundaries logged as they happen:
+
+| Trial | Class | Purpose |
+|---|---|---|
+| Rest, arm supported | `rest` | Noise floor and the stage-2 denominator |
+| Tremor, no voluntary motion | `tremor` | Stage-2 numerator; stages 4, 5 |
+| Voluntary reaching, no tremor | `intent` | Stage-6 denominator |
+| Both together | `both` | The operating condition |
+| Isolated flexion, then isolated extension | `intent` | Stage 3 — this is what actually exercises cross-talk |
+
+Logging boundaries by cue at record time is far more reliable than labelling after the fact.
+`protocol_fixture` in `tests/test_rcflex_semg_dataset.m` builds exactly this shape from
+synthetic trials and is the template.
+
+### 6.4 Running it
+
+```matlab
+C = rcflex_control_parameters; C.semg_enabled = true;
+C = rcflex_prepare_control(C);
+R = validate_rcflex_semg_dataset('my_recording.mat', C);
+```
+
+Stages report `PASS`, `FAIL` or **`SKIPPED`**. `SKIPPED` is deliberately distinct from
+`PASS`: a stage that could not run has told you nothing, and reading an absent measurement as
+a satisfied one is the single most expensive mistake available at this point. Results are
+written to `output/results/semg_dataset_validation.csv`.
+
+The synthetic source can be pushed through the identical gate as a control — pass a scenario
+struct from `rcflex_control_case` instead of a dataset.
+
+### 6.5 Thresholds, and what they are read against
+
+| Stage | Criterion | Synthetic reference |
+|---|---|---|
+| 1 Acquisition health | clip < 0.1 %, headroom ≥ 0 dB, band_frac > 0.5, mains < −6 dB | 0 % clip, 4.6–6.3 dB, 0.89–0.90, −12.9 dB |
+| 2 Burst SNR | **> 6 dB** | 8.5 dB (protocol), 8.0–12.7 dB (per-scenario) |
+| 3 Paired cross-talk | \|r\| < 0.6 | 0.19 — but the model **assumes zero cross-talk**, so this reference is not evidence |
+| 4 sEMG lead | 10–100 ms | +35 ms |
+| 5 Frequency agreement | < 1 Hz | 0 Hz |
+| 6 Intent/tremor discrimination | burst/envelope ratio > 2 | 11.0 |
+
+Stage 3 is the one to watch. The synthetic channels are generated independently, so its
+reference value is an artefact of that assumption rather than a prediction. Real forearm
+flexors and extensors are closely packed, and the agonist/antagonist feature layout rests on
+reciprocal activation.
 
 ---
 

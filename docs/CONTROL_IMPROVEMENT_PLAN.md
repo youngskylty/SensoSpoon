@@ -634,9 +634,16 @@ Every conclusion below was unchanged by the fixes. That is itself evidence that 
 are robust to acquisition defects, and therefore that such defects must be caught by an
 explicit check (`rcflex_semg_quality`) rather than by noticing bad results.
 
-One requirement remains unmodelled: there is no analogue anti-alias stage, because the
-synthetic source is band-limited by construction and cannot alias. The hardware requirement
-stands regardless; see `SEMG_SUBSYSTEM.md` §4.2.
+The anti-alias stage is now modelled too. `rcflex_semg_sample.m` applies a 2-pole 480 Hz
+filter after the gain stage and before sampling, with the analogue domain modelled at 4× the
+final rate and decimated afterwards — otherwise the model would assume the band limiting the
+filter exists to enforce. Enabling it drops the out-of-band residual by 8.3 dB and raises the
+in-band power fraction from 0.76 to 0.91. See `SEMG_SUBSYSTEM.md` §4.2.
+
+The recorded-data path (`C.semg_source = 'file'`) is implemented and tested against the
+synthetic stream, and `validate_rcflex_semg_dataset.m` runs the six-stage real-data gate.
+The dataset format and recording protocol are in `SEMG_SUBSYSTEM.md` §6. No real data has
+been processed yet, and no fusion work should begin until that gate passes.
 
 ### 10.6 What this evidence does and does not license
 
