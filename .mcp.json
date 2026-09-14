@@ -3,9 +3,7 @@
     "matlab": {
       "type": "stdio",
       "command": "C:\\Users\\Aditya\\.matlab\\agentic-toolkits\\bin\\matlab-mcp-server-windows-x64.exe",
-      "args": [
-        "--matlab-root=C:\\Program Files\\MATLAB\\R2026a"
-      ],
+      "args": [],
       "env": {}
     }
   }
