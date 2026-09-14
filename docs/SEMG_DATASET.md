@@ -34,6 +34,14 @@ v1.1.0**
 - Gestures **11 = wrist flexion** and **12 = wrist extension** — the isolated
   agonist/antagonist contractions our cross-talk stage needs.
 
+> **Upstream labelling is self-contradictory.** `GestureList.JPG` gives 11 = wrist flexion,
+> 12 = wrist extension; `MotionSequence.txt` gives the reverse, and also swaps 13/14
+> (pronation/supination). We follow the JPG. This is an upstream defect, not a conversion
+> error, and it is **harmless for stage 3**, which reports \|r\| and is invariant under
+> swapping agonist with antagonist. It does mean the flexor/extensor *identity* of the two
+> selected sites is not established, so the channels are named by their empirical
+> flexion/extension selectivity rather than by muscle.
+
 ---
 
 ## 2. Why this one, and why not the others
@@ -73,7 +81,7 @@ It is explicitly **not** a tremor dataset, and is not treated as one.
 |---|---|---|---|
 | 1 | Acquisition health | ✅ **Yes** | Needs only the signal |
 | 2 | Burst SNR > 6 dB | ❌ No | No tremor condition — nothing to put in the numerator |
-| 3 | Paired cross-talk | ✅ **Yes — and this is the point** | Isolated wrist flexion and extension with 16 forearm sites |
+| 3 | Raw cross-talk | ✅ **Yes — and this is the point** | Isolated wrist flexion and extension with 16 forearm sites, labelled `intent` |
 | 4 | sEMG lead | ❌ No | No accelerometer or IMU |
 | 5 | Frequency agreement | ❌ No | No mechanical reference |
 | 6 | Intent/tremor discrimination | ❌ No | Labels are voluntary/rest only; no tremor class |
@@ -146,7 +154,9 @@ conclusion about the design's central assumption.
 
 The two rings are 2 cm apart longitudinally, so `F(k) − F(k+8)` is a bipolar pair at 20 mm
 along the fibre direction — exactly the montage `SEMG_SUBSYSTEM.md` §1.9 specifies. With that
-derivation, cross-talk is **0.02–0.15**.
+derivation, raw cross-talk falls to **0.20–0.46** depending on electrode separation (§6.2),
+against 0.95–0.98 for the monopolar montage. The derivation is therefore essential and
+clearly correct; it is not, on its own, sufficient to pass the gate.
 
 ### 5.2 Channel selection is empirical
 
@@ -168,24 +178,74 @@ Run with **unmodified thresholds**. Participants 1 and 2, session 1:
 | Stage | P1 | P2 | Threshold | Synthetic reference |
 |---|---|---|---|---|
 | 1 Acquisition health | **PASS** | **PASS** | clip < 0.1 % | 0 % |
-| 3 Paired cross-talk \|r\| | **0.15 PASS** | **0.08 PASS** | < 0.6 | 0.19 *(artefact)* |
+| 3 Raw cross-talk \|r\| | **0.460 FAIL** | **0.262 PASS** | < 0.30 *(provisional)* | 0.044 *(artefact)* |
+| 3b `coactivation_corr` | 0.63 / 0.65 | 0.78 / 0.76 | *diagnostic* | 0.78–0.85 |
 | 2, 4, 5, 6 | SKIPPED | SKIPPED | — | — |
 
-Acquisition detail: no clipping, headroom 12–27 dB, in-band power fraction 0.95–0.98, mains
-−19 to −21 dB, 82–143 µV rms.
+Acquisition detail: no clipping, headroom 12.0–27.3 dB, in-band power fraction 0.95–0.99,
+mains −19 to −23 dB, **16.6–130 µV rms**, crest factor **11.5–23.2**.
 
-**The finding that matters:** with a correct bipolar montage, real forearm sEMG shows
-agonist/antagonist cross-talk of 0.02–0.15 — comfortably below the 0.6 threshold and in the
-same range as the synthetic model's 0.19. The reciprocal-activation assumption behind the
-feature layout **survives contact with real data**. That was the largest open risk in the
-design.
+> **Superseded result.** An earlier revision of this document reported stage 3 as
+> **0.15 / 0.08 PASS** against a 0.6 threshold and concluded that the reciprocal-activation
+> assumption "survives contact with real data." **That conclusion is withdrawn.** It was
+> produced by the old metric, which correlated *envelopes* over the *whole pooled record* —
+> two independent errors. Envelope correlation measures shared neural drive rather than
+> electrical coupling, and pooling flexion, extension and rest averages relationships of
+> opposite sign so they cancel. On these same recordings the pooled figure moves between
+> −0.58 and +0.92 depending only on which conditions are included.
 
-Two caveats on that result. It is measured on **healthy voluntary contractions**, not tremor,
-and tremor may drive antagonist pairs more synchronously — in essential tremor the classic
-pattern is synchronous rather than alternating. And amplitudes here (82–143 µV rms) are well
-below the synthetic model's 700 µV, because these are moderate voluntary contractions rather
-than near-MVC; the real front end will therefore sit lower in its range than
-`SEMG_SUBSYSTEM.md` §1.4 assumes, which argues for the upper end of the 150–200 gain range.
+### 6.1 What the corrected metric shows
+
+Per-segment raw zero-lag \|r\| (full detail in `output/results/semg_stage3_segments_p*.csv`):
+
+- **P1 fails**: worst 0.460, median 0.331 across 12 segment-axes.
+- **P2 passes**: worst 0.262, median 0.129.
+
+The split is not subject variability — it tracks **electrode separation**. P1's roll pair sits
+on opposite aspects of the forearm (4 positions apart on the ring) and reads 0.06–0.46; its
+pitch pair is only 2 positions apart and reads 0.33–0.46 consistently.
+
+### 6.2 Cross-talk decays with electrode separation
+
+Raw band-limited \|r\| across all 8 bipolar sites, contraction segments only:
+
+| Circumferential separation | P1 | P2 |
+|---|---|---|
+| 1 position | 0.703 | 0.395 |
+| 2 positions | 0.441 | 0.198 |
+| 3 positions | 0.314 | 0.191 |
+| 4 positions (opposite) | **0.275** | **0.201** |
+
+Monotonic decay is the signature of **volume conduction** — genuine electrical cross-talk.
+The ~0.20 plateau that does not decay further is the **residual common-mode** of a shared
+reference montage, and is irreducible with this electrode arrangement. Those two numbers are
+what the provisional 0.30 gate is derived from: it sits above the irreducible common-mode
+floor, so it does not demand better than the instrumentation can deliver, and below
+adjacent-site placement, so it fails sloppy siting.
+
+### 6.3 The finding that matters
+
+**Placement, not physiology, is the binding constraint.** Agonist/antagonist channels sited on
+opposite aspects of the forearm achieve acceptable cross-talk; closely spaced ones do not, and
+one of two participants fails outright on a substitute pair that was only 2 positions apart.
+`SEMG_SUBSYSTEM.md` §1.9 already calls cross-talk "the main placement risk" — this quantifies
+it and promotes it to a hard requirement with a verification step.
+
+Separately, **stage 3b shows co-activation of 0.63–0.78** on these healthy voluntary
+contractions. That is a physiological observation, not a defect, and it does not gate — but it
+does mean the agonist/antagonist envelopes are *not* reciprocal here, which is worth carrying
+into the feature design.
+
+### 6.4 Caveats
+
+Measured on **healthy voluntary contractions**, not tremor; tremor may drive antagonist pairs
+more synchronously — in essential tremor the classic pattern is synchronous rather than
+alternating. Amplitudes (16.6–130 µV rms) are well below the synthetic model's 700 µV because
+these are moderate voluntary contractions rather than near-MVC, so the real front end will sit
+lower in its range than `SEMG_SUBSYSTEM.md` §1.4 assumes. Crest factors of **11.5–23.2**
+exceed the 7–10 assumed in `SEMG_IMPLEMENTATION.md` §5, so the gain must be set from a real
+captured peak rather than an rms estimate. Two participants is a small sample, and the 0.30
+threshold is provisional on exactly that basis.
 
 ---
 
@@ -202,8 +262,15 @@ Both come from the same place: **our own recording**, on the hardware in
 actually lead the IMU? — needs no labelling at all, only simultaneous capture, so it is
 runnable as soon as the front end exists.
 
-Until then the honest position is: acquisition and cross-talk are validated on real data;
-the tremor-specific claims rest on the synthetic model alone.
+Until then the honest position is: **acquisition is validated on real data; cross-talk is
+measured on real data and fails for one of two participants**; and the tremor-specific claims
+rest on the synthetic model alone.
+
+A third item now joins the list, and it is cheap: **the stage 3 failure is a placement
+problem, so the recording protocol must include a placement-verification step.** Site the
+agonist/antagonist pairs on opposite aspects of the forearm and confirm raw zero-lag \|r\| <
+0.30 on an isolated contraction *before* recording the tremor trials, rather than discovering
+it afterwards.
 
 ---
 

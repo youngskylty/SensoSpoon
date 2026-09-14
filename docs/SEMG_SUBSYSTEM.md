@@ -433,6 +433,17 @@ different feature.
 
 **This is the largest untested assumption in the current design.**
 
+**Correlate the RAW band-limited waveforms at zero lag, not the envelopes, and score each
+isolated contraction separately.** Electrical cross-talk is volume conduction, which is
+quasi-static at EMG frequencies and therefore appears in the raw waveform instantaneously.
+Two muscles merely *driven together* have correlated envelopes while their raw interference
+patterns stay independent, because their motor-unit pools are independent — so envelope
+correlation measures shared neural drive, not coupling. The synthetic source settles it: with
+zero cross-talk by construction it still shows envelope \|r\| ≈ 0.8 against raw \|r\| ≈ 0.04.
+Envelope correlation is retained as **stage 3b `coactivation_corr`**, a diagnostic that never
+gates. Pooling conditions is equally invalid: flexion, extension and rest carry relationships
+of opposite sign and cancel. The formal definition is in `SEMG_IMPLEMENTATION.md` §14.
+
 ### 5.5 Does sEMG really lead the IMU?
 
 The single most important measurement, because it is the only thing sEMG offers that a
@@ -515,13 +526,16 @@ sample rate below the band requirement, and invalid label classes. Each is cover
 
 ### 6.2 Minimum useful dataset
 
-`semg` + `fs` alone runs **stages 1 and 3**. Adding `labels` with at least one tremor-bearing
-and one tremor-free segment adds the **stage 2 go/no-go**. Adding `imu_accel` adds **stages 4
-and 5**, which are the two that decide whether sEMG carries anything the IMU does not.
+`semg` + `fs` alone runs **stage 1 only**. Adding `labels` with at least one isolated
+contraction segment (`class = 'intent'`) adds **stage 3**; with at least one tremor-bearing
+and one tremor-free segment it adds the **stage 2 go/no-go** and **stage 6**. Adding
+`imu_accel` adds **stages 4 and 5**, which are the two that decide whether sEMG carries
+anything the IMU does not.
 
-Nothing here needs a full labelled corpus to start. A public dataset with no IMU and no
-labels still answers the two most likely reasons for early failure — bad acquisition and
-cross-talk.
+Nothing here needs a full labelled corpus to start. But note that **stage 3 requires labels**:
+it scores each isolated contraction separately, and an unlabelled record gives it nothing to
+score. It reports `SKIPPED` rather than falling back to a pooled correlation, because the
+pooled figure is exactly the artefact that made the superseded metric unsound.
 
 ### 6.3 Recording protocol
 
@@ -563,7 +577,8 @@ struct from `rcflex_control_case` instead of a dataset.
 |---|---|---|
 | 1 Acquisition health | clip < 0.1 %, headroom ≥ 0 dB, band_frac > 0.5, mains < −6 dB | 0 % clip, 4.6–6.3 dB, 0.89–0.90, −12.9 dB |
 | 2 Burst SNR | **> 6 dB** | 8.5 dB (protocol), 8.0–12.7 dB (per-scenario) |
-| 3 Paired cross-talk | \|r\| < 0.6 | 0.19 — but the model **assumes zero cross-talk**, so this reference is not evidence |
+| 3 Raw cross-talk | \|r\| < 0.30 **(provisional)** | 0.044 — but the model **assumes zero cross-talk**, so this reference is not evidence |
+| 3b `coactivation_corr` | **diagnostic, no threshold** | 0.78–0.85 — high despite zero cross-talk, which is the point |
 | 4 sEMG lead | 10–100 ms | +35 ms |
 | 5 Frequency agreement | < 1 Hz | 0 Hz |
 | 6 Intent/tremor discrimination | burst/envelope ratio > 2 | 11.0 |
@@ -572,6 +587,12 @@ Stage 3 is the one to watch. The synthetic channels are generated independently,
 reference value is an artefact of that assumption rather than a prediction. Real forearm
 flexors and extensors are closely packed, and the agonist/antagonist feature layout rests on
 reciprocal activation.
+
+On real data (GRABMyo, two participants) stage 3 **fails for one of the two** — 0.460 against
+the 0.30 gate — and the failure tracks electrode separation: the pair sited on opposite
+aspects of the forearm reads ~0.20, the poorly separated substitute pair ~0.33–0.46.
+**Electrode placement is therefore a first-order design requirement, not a preference.** See
+`SEMG_DATASET.md` §6.
 
 ---
 

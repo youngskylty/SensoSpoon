@@ -253,7 +253,7 @@ to obtain it programmatically).
 | Field | Unlocks |
 |---|---|
 | `imu_accel` (n × 2, tremor **acceleration**), `imu_fs` | stages 4, 5 |
-| `labels` (`t_start`, `t_end`, `class` ∈ rest/tremor/intent/both) | stages 2, 6 |
+| `labels` (`t_start`, `t_end`, `class` ∈ rest/tremor/intent/both) | stages 2, 3, 6 |
 | `t0`, `channels`, `subject`, `session`, `device`, `notes` | provenance |
 
 The spec actively rejects what real datasets actually get wrong: transposed matrices,
@@ -318,8 +318,18 @@ Synthetic source, 4 s scenarios, 8 Hz tremor where present
 | Envelope vs tremor magnitude | **\|r\| ≤ 0.40** |
 | Acquisition health | 0 % clipping, 4.6–6.3 dB headroom, band fraction 0.89–0.90, mains −12 to −13 dB |
 
-Six-stage gate on a multi-trial synthetic protocol: SNR 8.5 dB, cross-talk 0.19, lead
+Six-stage gate on a multi-trial synthetic protocol: SNR 8.5 dB, raw cross-talk 0.044, lead
 35.0 ms, frequency agreement 0 Hz, discrimination 11.0 — all pass.
+
+> **The stage 3 synthetic value is not a cross-talk reference.** The model generates its four
+> channels independently, so it contains essentially zero cross-talk *by construction*; 0.044
+> is a measurement of that assumption, not a prediction about hardware. The superseded value
+> of **0.19** was produced by the old pooled *envelope* metric and must no longer be quoted as
+> a cross-talk reference for any purpose — see §12.2.
+>
+> The same synthetic stream reports **coactivation_corr ≈ 0.78–0.85** (stage 3b) despite
+> containing no cross-talk at all, which is precisely why envelope correlation cannot be used
+> as the cross-talk gate.
 
 **Conclusions supported (on the synthetic source as modelled):** the discriminating feature
 is the **burst band, not the envelope**; sEMG carries an independent frequency observable;
@@ -339,10 +349,30 @@ Ordered by how much they could cost.
    results show the preprocessing chain *recovers structure that was put in*. They are not
    evidence about real physiology. Every number in §11 should be read as an upper bound.
 
-2. **Zero cross-talk is assumed.** The model generates the four channels independently. The
-   agonist/antagonist feature layout rests on reciprocal activation, and forearm flexors and
-   extensors are closely packed — so the measured cross-talk of |r| = 0.19 is an **artefact
-   of the model, not a prediction**. This is the largest untested assumption in the design.
+2. **Zero cross-talk is assumed.** The model generates the four channels independently, so
+   any cross-talk figure it produces (now |r| = 0.044 on the raw metric) is an **artefact of
+   the model, not a prediction**. This remains the largest untested assumption in the design,
+   and on real data it does **not** hold uniformly — see `SEMG_DATASET.md` §6.
+
+   Two distinct quantities were conflated here until the GRABMyo run, and the distinction is
+   now load-bearing:
+
+   | | Measured on | Physical meaning | Role |
+   |---|---|---|---|
+   | **Stage 3, raw cross-talk** | band-limited **raw waveform**, zero lag | same motor-unit potentials volume-conducted into both electrodes, plus residual common-mode — an **acquisition defect** | **GATE**, \|r\| < 0.30 |
+   | **Stage 3b, `coactivation_corr`** | **envelope** | both muscles genuinely driven together — a **physiological observation** | diagnostic, never gates |
+
+   Volume conduction is quasi-static at EMG frequencies, so real cross-talk appears in the raw
+   waveform at zero lag. Independent motor-unit pools mean co-contraction leaves the raw
+   waveforms uncorrelated while their envelopes track each other closely. The synthetic source
+   demonstrates the separation directly: zero cross-talk by construction, raw \|r\| = 0.044,
+   envelope \|r\| = 0.78–0.85.
+
+   The superseded metric correlated **envelopes** over the **whole pooled record**, and both
+   choices were wrong. Envelope correlation measures shared drive rather than coupling; pooling
+   flexion, extension and rest averages relationships of opposite sign and cancels to near zero
+   regardless of the underlying cross-talk. Together they produced a confident PASS on a
+   quantity that had never actually been measured.
 
 3. **Constant electromechanical delay.** Real EMD varies with contraction level, fatigue and
    muscle. The +35 ms lead is therefore an optimistic bound on how reliable the phase
@@ -386,10 +416,46 @@ R = validate_rcflex_semg_dataset('recording.mat', C);
 |---|---|---|---|
 | 1 | Acquisition health | clip < 0.1 %, headroom ≥ 0 dB, band fraction > 0.5, mains < −6 dB | 0 %, 4.6–6.3 dB, 0.89, −12.9 dB |
 | 2 | Burst SNR | **> 6 dB** | 8.5 dB |
-| 3 | Paired cross-talk | \|r\| < 0.6 | 0.19 *(artefact — see §12.2)* |
+| 3 | Raw cross-talk | \|r\| < 0.30 **(provisional)** | 0.044 *(artefact — see §12.2)* |
 | 4 | sEMG lead | 10–100 ms | +35 ms |
 | 5 | Frequency agreement | < 1 Hz | 0 Hz |
 | 6 | Intent/tremor discrimination | burst/envelope ratio > 2 | 11.0 |
+| 3b | `coactivation_corr` | **no threshold — diagnostic** | 0.78–0.85 |
+
+### Stage 3 — formal definition
+
+For each axis (roll = channels 1–2, pitch = channels 3–4) and each labelled **isolated
+contraction** segment — the cued isolated flexion / extension trials, logged with
+`class = 'intent'` per `SEMG_SUBSYSTEM.md` §6.3:
+
+1. Discard the first **1.5 s** of the segment, excluding the contraction ramp and any filter
+   transient at a trial join. Segments leaving < 0.25 s are not scored.
+2. Band-limit the raw electrode-referred channels to
+   `[C.semg_band_lo_Hz, C.semg_band_hi_Hz]` (zero-phase, so the lag diagnostic is unbiased).
+3. Compute the **zero-lag** Pearson correlation `r` between the two band-limited waveforms.
+
+```
+stage 3 = max over { all isolated segments } x { roll, pitch } of |r|
+```
+
+**Worst case gates**, because cross-talk is a property of electrode placement and one badly
+sited pair breaks the agonist/antagonist feature layout that a median would hide. The
+**median** is reported alongside as a diagnostic, and **every segment's value is written to
+`output/results/semg_stage3_segments.csv`** so the threshold can be reassessed later against
+our own recordings.
+
+**Rest, `tremor` and `both` segments cannot score this stage.** Rest carries no signal to
+correlate and the others are not isolated contractions. With no usable segment the stage
+reports `SKIPPED`, never a pooled fallback.
+
+**The 0.30 threshold is provisional.** It is an engineering gate derived from the
+distance-decay structure of volume conduction and the residual common-mode floor of a
+shared-reference montage (`SEMG_DATASET.md` §6.2) — **not** a clinically established
+universal cross-talk limit. It must not be retuned to make a dataset pass.
+
+**Cross-correlation peak lag** is recorded per segment as a diagnostic. The gate uses zero lag
+regardless. A correlation peaking away from zero lag is *not* volume-conducted cross-talk and
+must not be reinterpreted as such.
 
 Stages report `PASS`, `FAIL` or **`SKIPPED`**. `SKIPPED` is deliberately distinct from
 `PASS`: a stage that could not run has told you nothing, and reading an absent measurement
