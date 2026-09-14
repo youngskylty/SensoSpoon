@@ -12,10 +12,14 @@ function [emg,tEmg,activation]=rcflex_semg_truth(time,intent,tremor,C,seed)
 %          rcflex_control_parameters.m).
 % emg    : numel(tEmg) x 4 clean electrode voltages (V), channel order
 %          [roll agonist, roll antagonist, pitch agonist, pitch antagonist].
-% tEmg   : sEMG sample times, spaced 1/C.semg_hz. C.semg_hz is an exact
-%          integer multiple of C.outer_hz, so every control tick contains
-%          exactly C.semg_hz/C.outer_hz sEMG samples and the two streams are
-%          synchronous by construction rather than by resampling.
+% tEmg   : sample times on the ANALOGUE grid, spaced 1/(C.semg_hz *
+%          C.semg_oversample). This function models the muscle and the
+%          electrode, which are continuous-time; sampling happens in
+%          rcflex_semg_sample.m, after the anti-alias filter. Generating here at
+%          the final 4 kHz rate would be assuming the very thing the anti-alias
+%          stage exists to guarantee -- that nothing lives above Nyquist -- so
+%          the band-limiting filter below leaves genuine content above 2 kHz
+%          for that stage to remove.
 % activation: numel(tEmg) x 4 muscle activation envelopes in [0,1]; the
 %          noise-free drive the interference pattern is modulated by. Returned
 %          so the characterisation script can separate "what the muscle did"
@@ -43,7 +47,8 @@ function [emg,tEmg,activation]=rcflex_semg_truth(time,intent,tremor,C,seed)
 % so it is modelled explicitly as C.semg_emd_s of LEAD, not left implicit.
 if nargin<5;seed=C.seed+8100;end
 time=time(:);nch=4;
-dtEmg=1/C.semg_hz;tEmg=(time(1):dtEmg:time(end))';
+fsAnalog=C.semg_hz*C.semg_oversample;
+dtEmg=1/fsAnalog;tEmg=(time(1):dtEmg:time(end))';
 
 % Resample the drive onto the sEMG grid, advanced by the electromechanical
 % delay so the electrical signal leads the mechanical one. Times past the end
@@ -81,8 +86,8 @@ activation=min(max(activation,0),C.semg_activation_max);
 % channel. Deterministic in the scenario seed.
 stream=RandStream('mt19937ar','Seed',mod(seed,2^32-1));
 w=randn(stream,numel(tEmg),nch);
-[bh,ah]=highpass2(C.semg_band_lo_Hz,C.semg_hz);
-[bl,al]=lowpass2(C.semg_band_hi_Hz,C.semg_hz);
+[bh,ah]=highpass2(C.semg_band_lo_Hz,fsAnalog);
+[bl,al]=lowpass2(C.semg_band_hi_Hz,fsAnalog);
 w=filter(bh,ah,w);w=filter(bl,al,w);
 w=w./max(sqrt(mean(w.^2,1)),eps);
 

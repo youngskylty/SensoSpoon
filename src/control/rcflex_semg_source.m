@@ -41,22 +41,33 @@ switch source
    'SensoSpoon:Semg','The synthetic source needs a case with intent and tremor truth (rcflex_control_case).');
   seed=C.seed;
   if isfield(D,'seed');seed=D.seed;end
-  [clean,tRaw,activation]=rcflex_semg_truth(D.time,D.intent,D.tremor,C,seed+8100);
-  raw=rcflex_semg_sample(clean,tRaw,C,seed+8200);
-  meta=struct('source','synthetic','seed',seed,'clean',clean,'activation',activation,...
-   'ground_truth',true);
+  % rcflex_semg_truth works on the ANALOGUE (oversampled) grid; sampling and
+  % decimation to C.semg_hz happen inside rcflex_semg_sample, after the
+  % anti-alias filter. Only the decimated stream leaves this function, so every
+  % consumer still sees a plain C.semg_hz grid.
+  [clean,tAnalog,activation]=rcflex_semg_truth(D.time,D.intent,D.tremor,C,seed+8100);
+  [raw,tRaw]=rcflex_semg_sample(clean,tAnalog,C,seed+8200);
+  meta=struct('source','synthetic','seed',seed,'ground_truth',true,...
+   'analog_time',tAnalog,'clean',clean,'activation',activation,...
+   'oversample',C.semg_oversample);
 
  case 'file'
-  error('SensoSpoon:SemgSourceNotImplemented',[ ...
-   'C.semg_source=''file'' is not implemented yet (deferred until a dataset is chosen).\n' ...
-   'To add it, return raw electrode-referred volts on a uniform %g Hz grid with %d channels,\n' ...
-   'resampling here if the recording rate differs, and set meta.ground_truth=false.'],...
-   C.semg_hz,C.semg_channels);
+  % A recorded dataset. Deliberately minimal: one struct (or a .mat holding
+  % one), validated and regridded onto the required rate. See
+  % rcflex_semg_dataset_spec.m for the field contract -- that function is the
+  % single definition of the format, and is what a recording script should be
+  % written against.
+  src=[];
+  if isfield(C,'semg_file')&&~isempty(C.semg_file);src=C.semg_file;end
+  if isfield(D,'semg_dataset')&&~isempty(D.semg_dataset);src=D.semg_dataset;end
+  assert(~isempty(src),'SensoSpoon:Semg',...
+   'C.semg_source=''file'' needs C.semg_file (a path or struct) or D.semg_dataset.');
+  [raw,tRaw,meta]=load_dataset(src,C);
 
  case 'device'
   error('SensoSpoon:SemgSourceNotImplemented',[ ...
    'C.semg_source=''device'' is not implemented yet (no physical front end built).\n' ...
-   'See docs/SEMG_SENSOR.md for the hardware architecture this source is expected to read from.']);
+   'See docs/SEMG_SUBSYSTEM.md for the hardware architecture this source is expected to read from.']);
 
  otherwise
   error('SensoSpoon:SemgSource','Unknown C.semg_source: %s',source);
@@ -67,5 +78,51 @@ assert(numel(tRaw)==size(raw,1),'SensoSpoon:Semg','Source returned mismatched sa
 if numel(tRaw)>1
  assert(abs((tRaw(2)-tRaw(1))-1/C.semg_hz)<1e-9,...
   'SensoSpoon:Semg','Source grid is %g Hz, not the required %g Hz',1/(tRaw(2)-tRaw(1)),C.semg_hz);
+end
+end
+function [raw,tRaw,meta]=load_dataset(src,C)
+%LOAD_DATASET Read, validate and regrid a recorded sEMG dataset.
+S=src;
+if ischar(S)||isstring(S)
+ S=char(S);
+ assert(isfile(S),'SensoSpoon:Semg','sEMG dataset not found: %s',S);
+ d=load(S);f=fieldnames(d);
+ if isscalar(f)&&isstruct(d.(f{1}));S=d.(f{1});else;S=d;end
+end
+assert(isstruct(S),'SensoSpoon:Semg','sEMG dataset must be a struct, or a path to a .mat holding one');
+
+rcflex_semg_dataset_spec(S,C);   % validates, and errors with the field contract
+
+fs=double(S.fs);x=double(S.semg);
+
+% Refuse data that cannot represent the band the pipeline assumes. Accepting it
+% silently would produce features computed over a partly empty band, which
+% presents as weak physiology rather than as a wrong recording -- the most
+% expensive kind of mistake at this stage.
+assert(fs>=2*C.semg_band_hi_Hz,'SensoSpoon:Semg',[ ...
+ 'Dataset rate %g Hz cannot represent the %g-%g Hz band this pipeline assumes (needs >= %g Hz). ' ...
+ 'Re-record, or narrow C.semg_band_hi_Hz and re-derive the features.'],...
+ fs,C.semg_band_lo_Hz,C.semg_band_hi_Hz,2*C.semg_band_hi_Hz);
+
+% Regrid onto exactly C.semg_hz. This must happen here, not in the caller: the
+% fixed-block synchronisation contract is what the whole pipeline rests on.
+if abs(fs-C.semg_hz)<1e-9
+ raw=x;
+else
+ [p,q]=rat(C.semg_hz/fs,1e-9);
+ raw=resample(x,p,q);
+end
+n=size(raw,1);tRaw=(0:n-1)'/C.semg_hz;
+if isfield(S,'t0');tRaw=tRaw+double(S.t0);end
+
+meta=struct('source','file','ground_truth',false,'fs_original',fs,'n_original',size(x,1));
+for f={'subject','notes','channels','session','device'}
+ if isfield(S,f{1});meta.(f{1})=S.(f{1});end
+end
+% Carried through for the validation stages that need them. Absent fields are
+% not an error: the corresponding stage reports itself SKIPPED, naming what is
+% missing, rather than silently producing a number from nothing.
+for f={'imu_accel','imu_fs','labels'}
+ if isfield(S,f{1});meta.(f{1})=S.(f{1});end
 end
 end

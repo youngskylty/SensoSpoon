@@ -111,6 +111,17 @@ C.semg_artifact_V=.12e-3;C.semg_artifact_Hz_range=[2 9];
                          % so characterisation cannot flatter the signal by
                          % measuring an artefact-free case.
 C.semg_noise_V=8e-6;     % amplifier/electrode broadband floor
+C.semg_oversample=4;     % The analogue domain is modelled at C.semg_hz*4 =
+                         % 16 kHz and decimated after the anti-alias filter.
+                         % Generating straight at 4 kHz would assume the band
+                         % limiting the anti-alias stage exists to enforce, and
+                         % the filter could then never be shown to earn its
+                         % place. 4x is the smallest ratio that leaves real
+                         % content above the 2 kHz final Nyquist.
+C.semg_aa_Hz=480;        % analogue anti-alias corner, just above the 450 Hz
+                         % signal band edge
+C.semg_aa_poles=2;       % simplest filter consistent with 20-450 Hz and 4x
+                         % oversampling; a Sallen-Key section in hardware
 C.semg_ac_couple_Hz=10;  % analog highpass AHEAD of the gain stage. Without it
                          % the electrode offset alone demands ~7.5 V of a 1.65 V
                          % converter and rails the channel; see

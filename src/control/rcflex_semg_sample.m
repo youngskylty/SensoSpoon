@@ -1,4 +1,4 @@
-function measurement=rcflex_semg_sample(emg,tEmg,C,seed)
+function [measurement,tMeas]=rcflex_semg_sample(emg,tEmg,C,seed)
 %RCFLEX_SEMG_SAMPLE Instrumentation model for the sEMG front end.
 % Mirrors the role rcflex_imu_sample.m plays for the IMU: takes clean sensor
 % truth and returns what the controller actually gets to see, with every
@@ -7,11 +7,20 @@ function measurement=rcflex_semg_sample(emg,tEmg,C,seed)
 % generated offline with the scenario, unlike the IMU which is sampled inside
 % the loop.
 %
-% emg  : n x 4 clean electrode voltages (V) from rcflex_semg_truth.
-% tEmg : n x 1 matching sample times (s).
-% measurement : n x 4 quantised electrode-referred voltages (V), i.e. the ADC
-%        reading divided back through the instrumentation gain, so the
-%        preprocessing chain works in physical units.
+% emg  : n x 4 clean electrode voltages (V) from rcflex_semg_truth, on the
+%        ANALOGUE grid (C.semg_hz * C.semg_oversample).
+% tEmg : n x 1 matching analogue-grid times (s).
+% measurement : m x 4 quantised electrode-referred voltages (V) at C.semg_hz,
+%        i.e. the ADC reading divided back through the instrumentation gain, so
+%        the preprocessing chain works in physical units.
+% tMeas : m x 1 sample times at C.semg_hz.
+%
+% Signal chain, in physical order:
+%   electrode -> corruptions -> AC coupling -> gain -> anti-alias -> decimate
+%   -> quantise/clip
+% Getting this order right is the point of the function. AC coupling must
+% precede gain (1.5) and anti-aliasing must precede sampling (see below), and
+% both constraints are on the ORDER, not on the individual blocks.
 %
 % The corruptions modelled, and why each is here:
 %
@@ -27,8 +36,18 @@ function measurement=rcflex_semg_sample(emg,tEmg,C,seed)
 %   mode that would make sEMG look more informative than it is.
 % * Broadband amplifier/electrode thermal noise, which sets the floor at rest.
 % * Finite ADC range and resolution, with saturation.
+%
+% Anti-aliasing. Everything above is computed on an oversampled grid so that
+% the anti-alias filter has genuine out-of-band content to remove: the truth
+% generator's 450 Hz band limit is only 2-pole, and the corruption noise is
+% white, so real power exists above the 2 kHz Nyquist of the final rate.
+% Without oversampling the model would ASSUME the band limiting that this stage
+% exists to enforce, and the filter would be a decorative block that could never
+% be shown to earn its place. Two poles at C.semg_aa_Hz is the simplest filter
+% consistent with the 20-450 Hz requirement and a 4x oversample ratio.
 if nargin<4;seed=C.seed+8200;end
 tEmg=tEmg(:);n=numel(tEmg);nch=size(emg,2);
+os=C.semg_oversample;fsAnalog=C.semg_hz*os;
 stream=RandStream('mt19937ar','Seed',mod(seed,2^32-1));
 
 % Per-channel DC offsets and mains phases: fixed for a session, not per sample.
@@ -66,9 +85,29 @@ p=exp(-2*pi*C.semg_ac_couple_Hz/C.semg_hz);
 zi=-p*raw(1,:);
 coupled=filter([1 -1]*p,[1 -p],raw,zi);
 
-% ADC. Gain maps the electrode-referred signal into the converter range; the
-% result is quantised and clipped there, then referred back to the electrode.
-adc=max(min(coupled*C.semg_gain,C.semg_adc_range_V),-C.semg_adc_range_V);
+% Gain stage.
+amplified=coupled*C.semg_gain;
+
+% Analogue anti-alias filter, BEFORE sampling. Cascaded 2-pole Butterworth
+% sections (C.semg_aa_poles is a multiple of 2), corner C.semg_aa_Hz.
+c=lowpass2(C.semg_aa_Hz,fsAnalog);
+filtered=amplified;
+for k=1:round(C.semg_aa_poles/2)
+ filtered=filter(c(1:3),[1 c(4:5)],filtered);
+end
+
+% Sample: decimate the analogue grid down to C.semg_hz. The ratio is an exact
+% integer, so this is a pure decimation with no interpolation.
+ix=1:os:n;
+sampled=filtered(ix,:);tMeas=tEmg(ix);
+
+% ADC. Quantised and clipped in converter units, then referred back to the
+% electrode so downstream code is independent of the gain actually used.
+adc=max(min(sampled,C.semg_adc_range_V),-C.semg_adc_range_V);
 quantum=2*C.semg_adc_range_V/2^C.semg_adc_bits;
 measurement=round(adc/quantum)*quantum/C.semg_gain;
+end
+function c=lowpass2(f,fs)
+k=tan(pi*f/fs);den=1+sqrt(2)*k+k*k;
+c=[k*k 2*k*k k*k]/den;c=[c 2*(k*k-1)/den (1-sqrt(2)*k+k*k)/den];
 end
