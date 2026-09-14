@@ -135,7 +135,29 @@ adaptive loop and is what lets case 20 (20 Hz) succeed instead of failing at −
 **Initialisation.** ω₀ = 2π·6 rad/s (mid-band), intent states from the first sample,
 tremor quadratures zero, `P₀` diagonal with large variance on ω so it converges fast.
 
-#### 1a. Independent tremor-frequency observable (identifiability repair)
+#### 1a. Independent tremor-frequency observable (identifiability repair) - **REVERTED**
+
+> **Status: implemented, then reverted.** The lag-autocorrelation observable described in
+> this section was added in commit `b0dd7cd` and has since been removed from
+> `rcflex_control_parameters.m`, `rcflex_intent_ekf_init.m` and `rcflex_intent_ekf_step.m`.
+> The packed EKF slice is back to **183** elements (`x(13)`, `P(:)(169)`, `nis_bar`) and
+> `info(4:5)` now read zero. Nothing else from `b0dd7cd` was reverted - this document, the
+> benchmark changes and the state-layout work all stand.
+>
+> The section is kept rather than deleted because the *analysis* in it is a real result and
+> still constrains the design: the joint intent + two-harmonic + shared-omega model genuinely
+> is weakly identifiable while intent and tremor ramp together, a single-step innovation
+> statistic genuinely cannot detect that failure, and the four tuning-style remedies listed
+> below genuinely do not work. That diagnosis is what motivates the sEMG stage (Sec 10): the
+> conclusion "add information about omega that does not come from the joint fit" is
+> unchanged; only the *source* of that information is now an open question rather than a
+> settled one, and a second sensing modality is a stronger answer to it than a derived
+> statistic of the same measurement.
+>
+> Development is therefore staged as: IMU-only baseline -> add and validate sEMG ->
+> characterise the combined signals -> decide what the estimator should take from sEMG ->
+> only then revisit the extended EKF. No change to the EKF measurement model or state vector
+> should be made ahead of that evidence.
 
 *Added after the first integration, in response to a measured failure. Retained here
 because it changes the packed state layout described in Step 4.*
@@ -369,23 +391,25 @@ be updated together:
 - `src/control/rcflex_controller_sfun.m:12` (`Dwork(1).Dimensions`)
 - `src/control/rcflex_controller_sfun.m:16` (`init`)
 
-Store `P` in full — memory is irrelevant here and full-matrix storage keeps the code
-readable and the Jacobian bookkeeping obvious. **As built, the width is 400**, with the
-packed EKF slice at 101–327 and γ_auth at 328:
+Store `P` in full - memory is irrelevant here and full-matrix storage keeps the code
+readable and the Jacobian bookkeeping obvious. **As built the width is 400**, with the
+packed EKF slice at 101-283 and gamma_auth at 328:
 
 | z indices | contents |
 |---|---|
-| 101–113 | `x` (13 states) |
-| 114–282 | `P(:)` (13×13 = 169) |
+| 101-113 | `x` (13 states) |
+| 114-282 | `P(:)` (13x13 = 169) |
 | 283 | `nis_bar` |
-| 284–291 | Sec 1a highpass states (2 stages × 2 axes × {y_prev, u_prev}) |
-| 292–325 | Sec 1a delay lines (2·(2D+1) = 34 samples of the high-passed signal) |
-| 326–327 | Sec 1a EWMA `num_bar`, `den_bar` |
-| 328 | γ_auth |
+| 284-327 | unused for the base filter (was Sec 1a state before it was reverted) |
+| 328 | gamma_auth |
+| 329... | sEMG preprocessing state (Sec 10), `C.semg_enabled` only |
 
-The slice length is `C.ekf.s_len` and its initial value is `C.ekf.s0`, both built once in
-`rcflex_intent_ekf_init`, so `rcflex_attitude_step` and `rcflex_controller_sfun` initialise
-from a single definition and cannot drift apart. Both files' hard-coded `300` becomes `400`.
+The slice length is `C.ekf.s_len` (183 for the base filter, 387 with `C.ekf_osc2`) and its
+initial value is `C.ekf.s0`, both built once in `rcflex_intent_ekf_init`, so
+`rcflex_attitude_step` and `rcflex_controller_sfun` initialise from a single definition and
+cannot drift apart. gamma_auth sits at `max(328, 100 + C.ekf.s_len + 1)` rather than a
+literal 328, so a widened filter cannot overwrite it; the total width is likewise derived
+rather than hard-coded, in `state_width` in `rcflex_controller_sfun.m`.
 
 ### Step 5 — Widen the diagnostic vector
 
@@ -393,12 +417,11 @@ from a single definition and cannot drift apart. Both files' hard-coded `300` be
 - `src/control/rcflex_controller_sfun.m:6` (`OutputPort(2).Dimensions=16`)
 - `src/control/run_rcflex_control_fast.m:10` (`diagnostic=zeros(16,1)`)
 
-Widen to **24** in all three, appending `[omega_hat_Hz; nis_bar; gamma_trust; gamma_auth;
-i_pred_peak; omega_indep_Hz; freq_confidence; 0]` (the last two per Sec 1a — they occupy two
-of the three spare slots reserved for this, so the width stays 24). For `simple_pid` these
-trail as zeros so existing plots and
-`rcflex_control_metrics.m` keep working unchanged. Define the width once as a named constant
-if practical.
+Widened to **32**: 16 baseline, then `[omega_hat_Hz; nis_bar; gamma_trust; gamma_auth;
+i_pred_peak; 0; 0; 0]` for the EKF/authority stage (slots 22-23 held the Sec 1a outputs and
+now read zero), then the eight sEMG features of Sec 10 in 25-32. Both trailing groups read
+zero when their subsystem is off, so existing plots and `rcflex_control_metrics.m` - which
+indexes only from the front, at column 15 - keep working unchanged.
 
 ### Step 6 — Tuning  *(`src/control/tune_rcflex_control.m`)*
 
@@ -515,3 +538,143 @@ rather than driven from here.
 8. Flip `C.algorithm` back to `'simple_pid'`, re-run step 6, and confirm the numbers
    reproduce the existing `control_benchmark.csv` exactly. This proves the refactor did not
    perturb the control group, which is what makes the comparison table trustworthy.
+
+---
+
+## 10. sEMG sensing stage
+
+Added ahead of any further estimator work, per the staging note in Sec 1a. The goal of this
+stage is deliberately limited: **bring the signal in, prove it is sound, and measure what it
+contains** — not to fuse it. Nothing in this stage reads sEMG into the reference path, the
+EKF measurement model or the state vector.
+
+### 10.1 How the signal enters
+
+| File | Role |
+|---|---|
+| `src/model/rcflex_semg_truth.m` | Clean 4-channel sEMG from the scenario's intent and tremor ground truth |
+| `src/control/rcflex_semg_sample.m` | Instrumentation model: offset, mains, motion artefact, noise, AC coupling, ADC |
+| `src/control/rcflex_semg_init.m` | Fixed preprocessing coefficients and packed-state layout, built once |
+| `src/control/rcflex_semg_preprocess.m` | Causal per-tick chain, pure function |
+| `src/analysis/characterize_rcflex_semg.m` | The evidence this stage exists to produce |
+| `tests/test_rcflex_semg.m` | Standalone acceptance criteria, registered in `run_validation` |
+
+Channels are `[roll agonist, roll antagonist, pitch agonist, pitch antagonist]`.
+
+The stream is **not** appended to the 14-wide `sensor` vector. It is passed as an optional
+trailing argument to `rcflex_attitude_step(z, sensor, H, B, C, semgBlock)`, which leaves
+every Simulink port width and every existing call site untouched and keeps the IMU-only
+baseline bit-identical. The cost of that choice is that the Simulink closed-loop path has no
+sEMG port yet; that wiring is deferred until the fusion design is decided, and is noted in
+`rcflex_controller_sfun.m` so it cannot be forgotten.
+
+The single switch is `C.semg_enabled` in `rcflex_control_parameters.m`. With it `false` the
+system is the IMU-only baseline, verified bit-identical to the pre-sEMG code on the
+reference case (`sine`, 8 Hz, 1°/axis, seed 1701) across plant states, sensor samples and
+diagnostic columns 1–24.
+
+### 10.2 Synchronisation
+
+`C.semg_hz = 4000 = 5 × C.outer_hz`. The integer ratio is the entire synchronisation
+strategy: every 800 Hz control tick contains exactly five sEMG samples, so tick *j* consumes
+samples `(j−1)·5+1 … j·5` with no resampling, no timestamp matching and no accumulated
+drift. `rcflex_semg_init.m` asserts the ratio is integral, so the invariant cannot be broken
+silently by changing either rate.
+
+### 10.3 Preprocessing
+
+Per sEMG sample: 20 Hz highpass → 50 Hz mains notch → full-wave rectify → two parallel
+envelope detectors, a 3 Hz lowpass (**env**, voluntary effort level) and a 2–20 Hz bandpass
+(**burst**, rhythmic tremor drive). Features are taken at the last sample of each tick, so
+the output is causal and carries no lookahead. State is packed into a plain vector, so the
+step is a pure function under the same determinism contract as the EKF step.
+
+Two hardware details proved load-bearing rather than cosmetic:
+
+- **AC coupling must precede the gain stage.** The electrode half-cell offset is ~10× the
+  EMG. At `C.semg_gain = 500` it demands ~7.5 V of a ±1.65 V converter and rails the channel
+  solid. This was observed during development: two of four channels died completely while
+  the other two looked healthy, so an aggregate or single-channel check passed while half
+  the array was dead. `tests/test_rcflex_semg.m` now asserts channel liveness **per
+  channel** for exactly this reason.
+- **Motion artefact is modelled inside the tremor band** (2–9 Hz), not outside it, so the
+  characterisation cannot flatter the signal by scoring an artefact-free case.
+
+### 10.4 What the characterisation measures
+
+`output/results/semg_characterization.csv`, 4 s scenarios, 8 Hz tremor where present:
+
+| Quantity | Result |
+|---|---|
+| Burst-band SNR, tremor vs tremor-free | **+7.7 to +12.4 dB** across `sine`, `combined`, `mixed`, `chirp` |
+| Burst dominant frequency vs true 8 Hz | **7.81–8.20 Hz** on every tremor scenario; the tremor-free `intent` case reads 1.17 / 12.1 Hz, i.e. noise |
+| Burst lead over mechanical tremor | **+35 to +37.5 ms** (modelled EMD 40 ms; the ~4 ms shortfall is burst-bandpass group delay) |
+| Envelope vs voluntary intent | `combined` axis 2 **r = −0.62**; tremor-only scenarios correctly read 0 |
+| Envelope vs tremor magnitude | **\|r\| ≤ 0.40** — amplitude alone does *not* discriminate |
+
+Note the lead is measured against tremor **acceleration**, not tremor angle. Muscle force
+drives acceleration, so that is the mechanical quantity activation is in phase with; for a
+sinusoid the angle is 180° away, and correlating against the angle reports the true lead
+minus half a tremor period (at 8 Hz, +40 ms reads as −22.5 ms). The cross-correlation window
+is capped at half a tremor period for the same reason.
+
+### 10.5 Hardware requirements and the physical sensor
+
+The signal requirements implied by this software, a buildable sensor architecture, the
+component selection and the real-data test plan are in **`docs/SEMG_SUBSYSTEM.md`**.
+
+Two acquisition defects were found and fixed during that work, and the results below were
+regenerated afterwards. `C.semg_gain` was 500, above the clipping bound of 231 implied by the
+measured crest factor of 7–10, and is now 200. Separately, the AC-coupling filter started from
+zero state, so the electrode offset arrived as a step at *t* = 0 and railed every channel
+briefly regardless of gain — which had been masking the gain problem. Both are now correct
+and clipping is zero across 36 scenario/seed combinations.
+
+Every conclusion below was unchanged by the fixes. That is itself evidence that these features
+are robust to acquisition defects, and therefore that such defects must be caught by an
+explicit check (`rcflex_semg_quality`) rather than by noticing bad results.
+
+One requirement remains unmodelled: there is no analogue anti-alias stage, because the
+synthetic source is band-limited by construction and cannot alias. The hardware requirement
+stands regardless; see `SEMG_SUBSYSTEM.md` §4.2.
+
+### 10.6 What this evidence does and does not license
+
+It supports, on the synthetic source as modelled:
+
+- sEMG carries an **independent tremor-frequency observable** — the thing Sec 1a concluded
+  was needed, now from a genuinely separate measurement rather than a derived statistic of
+  the same signal.
+- sEMG carries **phase information the IMU cannot have yet**, by ~35 ms, which is the only
+  reason to prefer fusion over simply improving the IMU-only estimator.
+- The discriminating feature is the **burst band, not the envelope**. Envelope amplitude
+  correlates with voluntary intent but not usefully against tremor.
+
+It does **not** license a fusion design yet, and these caveats are load-bearing:
+
+- The source is synthetic and generated from the same ground truth used to score it. It
+  shows the preprocessing chain can *recover* structure that was put in; it is not evidence
+  about real physiology. `rcflex_semg_truth.m` carries the same "NOT a clinical recording"
+  caveat as `rcflex_tremor_input.m`.
+- The EMD is a modelled constant. Real EMD varies with contraction level, fatigue and
+  muscle, so the measured lead is an optimistic bound on how reliable that phase advantage
+  is.
+- Real sEMG adds cross-talk between adjacent muscles, electrode shift and fatigue-driven
+  spectral compression, none of which are modelled here.
+
+### References for this stage
+
+- De Luca, C. J. (1997). The use of surface electromyography in biomechanics.
+  *Journal of Applied Biomechanics*, 13(2), 135–163. — linear envelope detection, and the
+  standard filtering and artefact-rejection practice this chain follows.
+- Hogan, N., & Mann, R. W. (1980). Myoelectric signal processing: optimal estimation applied
+  to electromyography. *IEEE Trans. Biomedical Engineering*, 27(7), 382–395. — the
+  amplitude-modulated Gaussian model `rcflex_semg_truth.m` uses.
+- Cavanagh, P. R., & Komi, P. V. (1979). Electromechanical delay in human skeletal muscle
+  under concentric and eccentric contractions. *European Journal of Applied Physiology*,
+  42(3), 159–163. — the 30–50 ms EMD.
+- Merletti, R., & Parker, P. A. (Eds.) (2004). *Electromyography: Physiology, Engineering
+  and Non-Invasive Applications*. IEEE Press/Wiley. — front-end design, the half-cell offset
+  and the need for AC coupling ahead of gain.
+- Zhou, Y., Jenkins, M. E., Naish, M. D., & Trejos, A. L. (2018). Multi-sensor fusion for
+  tremor estimation. — prior art on combining sEMG with inertial sensing for tremor.
