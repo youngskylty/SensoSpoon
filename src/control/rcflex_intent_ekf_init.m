@@ -10,16 +10,43 @@ function C=rcflex_intent_ekf_init(C)
 % their indices, so every downstream use of idx.omega is unaffected by the
 % extension.
 osc2=isfield(C,'ekf_osc2')&&C.ekf_osc2;
-n=13+6*osc2;
+% C.ekf_intent_model is the only switch selecting the intent sub-model.
+intentModel='cv_legacy';
+if isfield(C,'ekf_intent_model')&&~isempty(C.ekf_intent_model);intentModel=C.ekf_intent_model;end
+assert(any(strcmp(intentModel,{'cv_legacy','cv','ca'})),...
+ 'SensoSpoon:Ekf','Unknown C.ekf_intent_model: %s',intentModel);
+ca=strcmp(intentModel,'ca');
+n=13+6*osc2+2*ca;
 idx=struct('thx',1,'thdx',2,'thy',3,'thdy',4,...
  'a1x',5,'b1x',6,'a2x',7,'b2x',8,'a1y',9,'b1y',10,'a2y',11,'b2y',12,'omega',13);
 if osc2
  idx.a3x=14;idx.b3x=15;idx.a3y=16;idx.b3y=17;idx.omega2x=18;idx.omega2y=19;
 end
+% Intent acceleration states are APPENDED, after omega and after any osc2
+% block, so states 1:13 keep their indices exactly and every existing use of
+% idx.omega and the packed 1:13 slice is unaffected.
+if ca;idx.accx=13+6*osc2+1;idx.accy=idx.accx+1;end
+
+qJerk=0;
+if ca
+ qJerk=C.ekf_q_intent*C.outer_hz^2;
+ if isfield(C,'ekf_q_intent_jerk');qJerk=C.ekf_q_intent_jerk;end
+end
 
 Q=zeros(n);
-Q(idx.thx,idx.thx)=1e-10;Q(idx.thdx,idx.thdx)=C.ekf_q_intent;   % intent, axis x (roll)
-Q(idx.thy,idx.thy)=1e-10;Q(idx.thdy,idx.thdy)=C.ekf_q_intent;   % intent, axis y (pitch)
+Q(idx.thx,idx.thx)=1e-10;Q(idx.thy,idx.thy)=1e-10;
+if ca
+ % Noise enters at the TOP of the chain only, which is the whole point of
+ % raising the model order: acceleration random-walks, and velocity and angle
+ % inherit that through the dynamics instead of being independently jittered.
+ % Double-driving velocity as well would reintroduce the agility the CA model
+ % exists to replace with structure.
+ Q(idx.thdx,idx.thdx)=1e-10;Q(idx.thdy,idx.thdy)=1e-10;
+ Q(idx.accx,idx.accx)=qJerk;Q(idx.accy,idx.accy)=qJerk;
+else
+ Q(idx.thdx,idx.thdx)=C.ekf_q_intent;   % intent, axis x (roll)
+ Q(idx.thdy,idx.thdy)=C.ekf_q_intent;   % intent, axis y (pitch)
+end
 h1Ix=[idx.a1x idx.b1x idx.a1y idx.b1y];h2Ix=[idx.a2x idx.b2x idx.a2y idx.b2y];
 for k=1:numel(h1Ix);Q(h1Ix(k),h1Ix(k))=C.ekf_q_tremor;end
 for k=1:numel(h2Ix);Q(h2Ix(k),h2Ix(k))=C.ekf_q_tremor2;end
@@ -38,6 +65,9 @@ R=C.ekf_r_meas*eye(2);
 
 x0=zeros(n,1);x0(idx.omega)=2*pi*C.ekf_omega_init_Hz;
 P0=1e-4*eye(n);
+% One process-noise step as the acceleration prior: the standard convention,
+% and it avoids inventing a separate tuning constant for the initial value.
+if ca;P0(idx.accx,idx.accx)=qJerk;P0(idx.accy,idx.accy)=qJerk;end
 for k=1:numel(h2Ix);P0(h2Ix(k),h2Ix(k))=1e-8;end  % tight h2 prior, breaks the omega/2 degeneracy
 P0(idx.omega,idx.omega)=(2*pi*C.ekf_omega_p0_Hz)^2;
 if osc2
@@ -83,6 +113,7 @@ if isfield(C,'ekf_omega2_rate_Hz_per_s');om2rate=C.ekf_omega2_rate_Hz_per_s;end
 s0=zeros(sLen,1);s0(1:n)=x0;s0(n+1:n+n*n)=P0(:);s0(ixNis)=C.ekf_nis_lo;
 
 C.ekf=struct('idx',idx,'Q',Q,'H',Hmeas,'R',R,'x0',x0,'P0',P0,...
+ 'intent_model',intentModel,'ca',ca,'q_jerk',qJerk,...
  'omega_min',2*pi*C.ekf_omega_min_Hz,'omega_max',2*pi*C.ekf_omega_max_Hz,...
  'harmonics',C.ekf_harmonics,'n',n,'osc2',osc2,...
  'omega2_min',om2min,'omega2_max',om2max,'omega2_rate',om2rate,...

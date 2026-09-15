@@ -59,6 +59,10 @@ end
 % ---------------------------------------------------------------------------
 
 F=eye(n);F(idx.thx,idx.thdx)=dt;F(idx.thy,idx.thdy)=dt;
+if E.ca
+ F(idx.thx,idx.accx)=.5*dt^2;F(idx.thdx,idx.accx)=dt;
+ F(idx.thy,idx.accy)=.5*dt^2;F(idx.thdy,idx.accy)=dt;
+end
 % [axis-a-index axis-b-index harmonic-number frequency-state-index]
 % The frequency-state column lets the second oscillator (states 14:19, enabled
 % by C.ekf_osc2) rotate at its OWN omega2 rather than a harmonic of omega,
@@ -69,6 +73,20 @@ if E.osc2
  pairs=[pairs;idx.a3x idx.b3x 1 idx.omega2x;idx.a3y idx.b3y 1 idx.omega2y];
 end
 xpred=x;
+% Intent mean propagation. Under 'cv_legacy' this is deliberately SKIPPED, so
+% the angle mean stays put while F above advances the covariance as though it
+% had moved -- the original behaviour, kept bit-identical by default. 'cv'
+% repairs that inconsistency; 'ca' additionally carries the acceleration state.
+switch E.intent_model
+ case 'cv'
+  xpred(idx.thx)=x(idx.thx)+dt*x(idx.thdx);
+  xpred(idx.thy)=x(idx.thy)+dt*x(idx.thdy);
+ case 'ca'
+  xpred(idx.thx)=x(idx.thx)+dt*x(idx.thdx)+.5*dt^2*x(idx.accx);
+  xpred(idx.thdx)=x(idx.thdx)+dt*x(idx.accx);
+  xpred(idx.thy)=x(idx.thy)+dt*x(idx.thdy)+.5*dt^2*x(idx.accy);
+  xpred(idx.thdy)=x(idx.thdy)+dt*x(idx.accy);
+end
 for p=1:size(pairs,1)
  ai=pairs(p,1);bi=pairs(p,2);h=pairs(p,3);wi=pairs(p,4);
  phi=h*x(wi)*dt;c=cos(phi);sn=sin(phi);
@@ -80,7 +98,11 @@ for p=1:size(pairs,1)
 end
 
 Qeff=E.Q;boost=1+C.ekf_q_boost*(1-gammaTrustPrev);
-ivel=[idx.thdx idx.thdy];Qeff(ivel,ivel)=Qeff(ivel,ivel)*boost;
+% The trust boost must act on whichever state actually drives the intent chain,
+% or it does nothing: under 'ca' the velocity entries are 1e-10 placeholders.
+ivel=[idx.thdx idx.thdy];
+if E.ca;ivel=[idx.accx idx.accy];end
+Qeff(ivel,ivel)=Qeff(ivel,ivel)*boost;
 if E.osc2
  % Starve the second oscillator when there is no low-band tremor to track.
  gi=[E.q3x_ix E.om2_ix(1)];gj=[E.q3y_ix E.om2_ix(2)];
@@ -164,7 +186,14 @@ alpha=1-exp(-dt/C.ekf_nis_tau_s);nisBar=(1-alpha)*nisBar+alpha*nis;
 gammaTrust=min(1,max(0,1-(nisBar-C.ekf_nis_lo)/(C.ekf_nis_hi-C.ekf_nis_lo)));
 
 Dl=C.ekf_lead_s;
-ref=[x(idx.thy)+Dl*x(idx.thdy);x(idx.thx)+Dl*x(idx.thdx)];
+% The lead predictor uses the model the filter actually carries, so under 'ca'
+% it extrapolates with the acceleration term too.
+if E.ca
+ ref=[x(idx.thy)+Dl*x(idx.thdy)+.5*Dl^2*x(idx.accy);...
+      x(idx.thx)+Dl*x(idx.thdx)+.5*Dl^2*x(idx.accx)];
+else
+ ref=[x(idx.thy)+Dl*x(idx.thdy);x(idx.thx)+Dl*x(idx.thdx)];
+end
 info=[x(idx.omega)/(2*pi);nisBar;gammaTrust;0;0];
 s(1:n)=x;s(n+1:n+n*n)=P(:);s(E.ix_nis)=nisBar;
 if E.osc2

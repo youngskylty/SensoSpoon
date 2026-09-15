@@ -35,6 +35,28 @@ C.ekf_omega_rate_Hz_per_s=50; % max |domega/dt|; guards against low-amplitude fa
                               % lowest value that still passes the 4-20 Hz
                               % convergence and chirp-tracking unit tests).
 C.ekf_lead_s=.0025;      % ~2 sample periods @ 800 Hz
+% --- Intent sub-model. THE SINGLE SWITCH ------------------------------------
+% One field selects the intent process model; nothing else needs editing.
+%   'cv_legacy' constant-VELOCITY covariance (F carries dt) but the state mean
+%               is NOT propagated -- xpred keeps the previous angle. This is
+%               the original behaviour and stays the default so every existing
+%               result and test is reproduced exactly. It is inconsistent: the
+%               covariance is advanced as though theta <- theta + dt*thetadot
+%               while the mean is not.
+%   'cv'        the same constant-velocity model with the mean propagated to
+%               match the covariance. The minimal repair of that inconsistency.
+%   'ca'        constant-ACCELERATION: one extra state per intent axis, so the
+%               model can represent sustained angular acceleration instead of
+%               dumping it into the tremor oscillator (states 1:13 keep their
+%               indices; the new states are appended after omega).
+C.ekf_intent_model='cv_legacy';
+% Jerk process noise for 'ca'. NOT tuned against any result. Chosen by one
+% stated rule: preserve the existing model's one-step VELOCITY increment
+% allowance exactly, now routed through acceleration. A one-step velocity
+% increment of dt*sqrt(q_jerk) equal to sqrt(C.ekf_q_intent) gives
+% q_jerk = C.ekf_q_intent/dt^2. The CA model therefore gets no extra agility
+% than the CV model already had -- only the ability to sustain it.
+C.ekf_q_intent_jerk=C.ekf_q_intent*C.outer_hz^2;
 % --- Optional second independent tremor oscillator (ekf_predictive only) -----
 % The base model carries two harmonics that share one omega (h=1 at omega,
 % h=2 at 2*omega), so it spans {F, 2F} only. Benchmark scenarios 'mixed' and
