@@ -42,8 +42,25 @@ ixZ=1:(2*nBq*nch);
 s_len=ixZ(end);
 s0=zeros(s_len,1);
 
+% --- Frequency-observable state (rcflex_semg_omega.m) -----------------------
+% Kept SEPARATE from the preprocessing state above: the preprocessing chain is
+% used by every consumer including the offline characterisation scripts, while
+% this is only touched when C.semg_fusion is on. Separate packing means the
+% fusion experiment cannot perturb the feature path it is being compared
+% against.
+fuseD=16;fuseTau=.15;
+if isfield(C,'semg_fuse_D');fuseD=C.semg_fuse_D;end
+if isfield(C,'semg_fuse_tau_s');fuseTau=C.semg_fuse_tau_s;end
+nBuf=2*fuseD+1;
+ixFuseBuf=1:(nBuf*nch);
+ixFuseNum=ixFuseBuf(end)+1;ixFuseDen=ixFuseNum+1;ixFusePow=ixFuseDen+1;
+s0Fuse=zeros(ixFusePow,1);
+
 C.semg=struct('nch',nch,'sub',sub,'hp',hp,'notch',notch,'env',env,'band',band,...
- 'n_bq',nBq,'ix_z',ixZ,'s_len',s_len,'s0',s0,'n_feat',2*nch);
+ 'n_bq',nBq,'ix_z',ixZ,'s_len',s_len,'s0',s0,'n_feat',2*nch,...
+ 'fuse_D',fuseD,'fuse_alpha',1-exp(-1/(C.outer_hz*fuseTau)),...
+ 'ix_fuse_buf',ixFuseBuf,'ix_fuse_num',ixFuseNum,'ix_fuse_den',ixFuseDen,...
+ 'ix_fuse_pow',ixFusePow,'s_len_fuse',ixFusePow,'s0_fuse',s0Fuse);
 end
 function c=lowpass2(f,fs)
 k=tan(pi*f/fs);den=1+sqrt(2)*k+k*k;

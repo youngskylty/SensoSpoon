@@ -139,6 +139,39 @@ C.semg_hp_Hz=20;         % must lead the chain: removes the half-cell offset
 C.semg_notch_bw_Hz=4;    % mains notch width
 C.semg_env_Hz=3;         % linear-envelope lowpass -> voluntary effort level
 C.semg_burst_band_Hz=[2 20]; % envelope bandpass -> rhythmic tremor bursting
+% --- sEMG -> EKF fusion (experiment E1). THE SINGLE SWITCH ------------------
+% One field selects the arm; nothing else needs editing to change behaviour.
+%   'off'    IMU-only. Bit-identical to the pre-fusion code.
+%   'semg'   burst-band frequency observable as a scalar pseudo-measurement on
+%            the EKF's omega state (13). No new EKF states.
+%   'oracle' the TRUE tremor frequency fed to the same input. Diagnostic upper
+%            bound only -- it reads simulation ground truth and is NOT a
+%            realisable mode. It exists so a null result can be attributed:
+%            if the oracle does not help either, omega was never the binding
+%            constraint and the fusion premise itself is wrong.
+% Requires C.semg_enabled=true and C.algorithm='ekf_predictive'; otherwise it
+% is inert, so the default configuration is unaffected.
+C.semg_fusion='off';
+C.semg_fuse_D=16;        % autocorrelation lag in OUTER ticks (20 ms @ 800 Hz).
+                         % Chosen so omega*D*dt stays inside (0,pi) across the
+                         % whole 2-25 Hz clamp band -- at 25 Hz it is exactly
+                         % pi, so acos stays single-valued and the estimate
+                         % cannot alias. Near 8 Hz it sits at ~1.0 rad, close
+                         % to the pi/2 point of maximum sensitivity.
+C.semg_fuse_tau_s=.15;   % EWMA window on the autocorrelation accumulators
+C.semg_fuse_r_omega=(2*pi*.6)^2;  % (rad/s)^2. Set from the MEASURED spread of
+                         % the burst dominant frequency on the synthetic source
+                         % (7.81-9.38 Hz against a true 8 Hz, SEMG_IMPLEMENTATION
+                         % 11) -- i.e. the observable is trusted to about
+                         % +/-0.6 Hz. Not tuned against the experiment outcome.
+C.semg_fuse_floor=1.5e-7;% burst-power half-power point for the confidence gate.
+                         % Measured: tremor-bearing scenarios carry 2.7e-7 to
+                         % 6.3e-7, tremor-free 'intent' carries 5.3e-8, so the
+                         % floor sits between them. Without this gate a rest or
+                         % intent-only segment would inject the arccos of a
+                         % noise ratio into an omega state that is otherwise
+                         % uninformed -- the gate makes R_eff -> inf instead.
+C.semg_fusion_oracle_Hz=8;  % only read when C.semg_fusion='oracle'
 % Trust gate (NIS-based). n_lo/n_hi bracket the expected NIS (=2, measurement dim).
 C.ekf_nis_tau_s=.05;C.ekf_nis_lo=4;C.ekf_nis_hi=25;C.ekf_q_boost=50;
 % Predictive authority manager.

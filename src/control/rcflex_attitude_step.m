@@ -26,16 +26,24 @@ dt=1/C.outer_hz;
 gammaIx=328;
 if isfield(C,'ekf')&&isfield(C.ekf,'s_len');gammaIx=max(328,100+C.ekf.s_len+1);end
 semgOn=isfield(C,'semg_enabled')&&C.semg_enabled&&isfield(C,'semg');
-semgIx=[];
+% C.semg_fusion is the ONLY switch selecting the fusion arm. 'off' leaves the
+% z layout, the EKF call and every number downstream exactly as they were.
+fuseMode='off';
+if semgOn&&isfield(C,'semg_fusion')&&~isempty(C.semg_fusion);fuseMode=C.semg_fusion;end
+fuseOn=~strcmp(fuseMode,'off');
+semgIx=[];fuseIx=[];
 if semgOn;semgIx=gammaIx+(1:C.semg.s_len);end
+if fuseOn;fuseIx=semgIx(end)+(1:C.semg.s_len_fuse);end
 nz=max(400,gammaIx);
 if semgOn;nz=max(nz,semgIx(end));end
+if fuseOn;nz=max(nz,fuseIx(end));end
 if isempty(z)
  z=zeros(nz,1);z(1:18)=[reshape(eye(3),9,1);reshape(eye(3),9,1)];z(91:99)=reshape(eye(3),9,1);z(gammaIx)=1;
  if isfield(C,'algorithm')&&strcmp(C.algorithm,'ekf_predictive')
   z(100+(1:C.ekf.s_len))=C.ekf.s0;
  end
  if semgOn;z(semgIx)=C.semg.s0;end
+ if fuseOn;z(fuseIx)=C.semg.s0_fuse;end
 end
 % sEMG runs before the reference branch so its features are available to a
 % future estimator without moving anything. Today nothing downstream reads
@@ -44,6 +52,28 @@ semgFeat=zeros(8,1);
 if semgOn&&~isempty(semgBlock)
  [semgState,feat]=rcflex_semg_preprocess(z(semgIx),semgBlock,C);
  z(semgIx)=semgState;semgFeat=feat;
+end
+% Frequency observable for the EKF omega state. semgOmega stays [] in every
+% path except an explicitly selected fusion arm, and the EKF step treats [] as
+% "no pseudo-measurement", so the IMU-only result is untouched.
+semgOmega=[];semgOmegaHz=0;semgConf=0;
+if fuseOn
+ switch fuseMode
+  case 'semg'
+   if ~isempty(semgBlock)
+    [fuseState,wHz,cf]=rcflex_semg_omega(z(fuseIx),semgFeat(C.semg.nch+1:end),C);
+    z(fuseIx)=fuseState;semgOmegaHz=wHz;semgConf=cf;
+    semgOmega=[2*pi*wHz;cf];
+   end
+  case 'oracle'
+   % Diagnostic upper bound: reads simulation ground truth through C, so it is
+   % NOT a realisable mode. Its only job is to separate "the observable is
+   % poor" from "omega was never the binding constraint".
+   semgOmegaHz=C.semg_fusion_oracle_Hz;semgConf=1;
+   semgOmega=[2*pi*semgOmegaHz;1];
+  otherwise
+   error('SensoSpoon:SemgFusion','Unknown C.semg_fusion: %s',fuseMode);
+ end
 end
 R=cell(2,1);omega=zeros(3,2);
 for j=1:2
@@ -62,14 +92,18 @@ hand=[atan2(Rh(3,2),Rh(2,2));atan2(Rh(1,3),Rh(1,1))];
 % (guard, error, PID, feedforward, allocator) is common to both algorithms.
 if strcmp(C.algorithm,'ekf_predictive')
  ekfIx=100+(1:C.ekf.s_len);
- [ekfSlice,refIntent,ekfInfo]=rcflex_intent_ekf_step(z(ekfIx),hand,C);
+ [ekfSlice,refIntent,ekfInfo]=rcflex_intent_ekf_step(z(ekfIx),hand,C,semgOmega);
  z(ekfIx)=ekfSlice;
  gammaTrust=ekfInfo(3);handRaw=hand([2 1]);
  blended=gammaTrust*refIntent+(1-gammaTrust)*handRaw;
  [gammaAuth,iPred]=rcflex_authority_manager(z(gammaIx),hand,ekfSlice(1:13),H,B,C);
  z(gammaIx)=gammaAuth;
  ref=handRaw+gammaAuth*(blended-handRaw);
- ekfDiag=[ekfInfo(1);ekfInfo(2);gammaTrust;gammaAuth;iPred;ekfInfo(4);ekfInfo(5);0];
+ % Slots 6:7 carried the Sec 1a frequency observable before it was reverted and
+ % have read zero since. The sEMG observable is the same quantity from a
+ % different sensor, so it reuses them: the diagnostic stays 32 wide and no
+ % Simulink port width changes. Both read zero when C.semg_fusion='off'.
+ ekfDiag=[ekfInfo(1);ekfInfo(2);gammaTrust;gammaAuth;iPred;semgOmegaHz;semgConf;0];
 else
  % Causal fixed IIR sections. Coefficients are prepared before execution.
  ref=hand([2 1]);

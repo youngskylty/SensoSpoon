@@ -1,4 +1,4 @@
-function [s,ref,info]=rcflex_intent_ekf_step(s,hand,C)
+function [s,ref,info]=rcflex_intent_ekf_step(s,hand,C,semgOmega)
 % Pure function, no persistent variables (determinism required by
 % tests/test_rcflex_intent_ekf.m and tests/test_rcflex_control.m).
 %
@@ -105,6 +105,29 @@ if E.osc2
   x=x-Kg*x(gk);
   P=P-Kg*P(gk,:);P=(P+P')/2;
  end
+end
+
+% sEMG frequency pseudo-measurement (C.semg_fusion). Scalar, LINEAR, on state
+% 13 only -- no new states, and states 1:12 stay informed by the IMU alone.
+%
+% This is the structural remedy Sec 1a called for: information about omega that
+% does not come from the joint fit. Sequential scalar update after the IMU
+% update, the same pattern the osc2 gate-pull above already uses.
+%
+% semgOmega = [omega_rad_per_s; confidence]. Confidence divides R rather than
+% switching the update on and off, so the measurement fades in and out smoothly
+% and a low-amplitude stretch cannot step the estimate. When confidence is zero
+% R_eff is infinite and the update contributes nothing.
+%
+% Placed BEFORE the rate limit and bounds below deliberately: the sEMG estimate
+% is subject to exactly the same guards as the joint-fit estimate, so it cannot
+% slew or rail omega in ways the IMU-only filter could not.
+if nargin>=4&&~isempty(semgOmega)&&semgOmega(2)>0
+ wi=idx.omega;
+ Rw=C.semg_fuse_r_omega/max(semgOmega(2),1e-6);
+ Sw=P(wi,wi)+Rw;Kw=P(:,wi)/Sw;
+ x=x+Kw*(semgOmega(1)-x(wi));
+ P=P-Kw*P(wi,:);P=(P+P')/2;
 end
 
 % Rate-limit omega itself. Any single sample's information about omega is
