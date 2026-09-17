@@ -171,8 +171,30 @@ C.semg_burst_band_Hz=[2 20]; % envelope bandpass -> rhythmic tremor bursting
 %            realisable mode. It exists so a null result can be attributed:
 %            if the oracle does not help either, omega was never the binding
 %            constraint and the fusion premise itself is wrong.
-% Requires C.semg_enabled=true and C.algorithm='ekf_predictive'; otherwise it
-% is inert, so the default configuration is unaffected.
+%
+% E1 RESULT: NEGATIVE, and kept in the tree as the record. Perfect omega bought
+% only +7.9 points on case 9, the burst-band frequency observable is biased
+% (9.15 Hz against a true 8 Hz), and 4 of 5 in-band sine cases regressed. Omega
+% was never the binding constraint. See the commit "Add the sEMG->omega fusion
+% experiment (E1)".
+%
+% --- Experiment E2: sEMG -> EKF INTENT PROCESS NOISE ------------------------
+% The arms the SHIPPED system uses. Same single switch.
+%   'intent_gate'       the sEMG+IMU system. Per-axis voluntary-drive
+%                       confidence from the differential envelope
+%                       (rcflex_semg_intent_gate) scales the intent process
+%                       noise, i.e. the estimator's licence to call motion
+%                       voluntary. Requires C.semg_enabled=true.
+%   'intent_gate_fixed' the IMU-ONLY ABLATION of that mechanism: identical Q
+%                       scaling held at the constant C.semg_gate_fixed_conf,
+%                       with no sEMG stream at all. This is the control group
+%                       that isolates the sensor's contribution from the
+%                       mechanism's, and it is why the sEMG claim can be made
+%                       quantitatively. It is the classic "just lower q_intent"
+%                       fix, and it fails exactly as predicted -- see
+%                       docs/SEMG_INTENT_FUSION.md Sec 2.
+% Requires C.algorithm='ekf_predictive'; otherwise inert, so the default
+% configuration is unaffected.
 C.semg_fusion='off';
 C.semg_fuse_D=16;        % autocorrelation lag in OUTER ticks (20 ms @ 800 Hz).
                          % Chosen so omega*D*dt stays inside (0,pi) across the
@@ -194,6 +216,88 @@ C.semg_fuse_floor=1.5e-7;% burst-power half-power point for the confidence gate.
                          % noise ratio into an omega state that is otherwise
                          % uninformed -- the gate makes R_eff -> inf instead.
 C.semg_fusion_oracle_Hz=8;  % only read when C.semg_fusion='oracle'
+% --- E2 intent gate (read only by the 'intent_gate*' arms) ------------------
+C.semg_gate_fc_Hz=1;     % 2-pole lowpass on the agonist-antagonist envelope
+                         % difference. Muscle force follows tremor
+                         % ACCELERATION, which grows as omega^2, so tremor-
+                         % driven activation leaks into the envelope worst at
+                         % high tremor frequency. Selected by sweep over
+                         % 0.6-5 Hz as the corner below which the measured
+                         % tremor-only drive stops falling appreciably, while
+                         % the 0.2-0.25 Hz voluntary content is still passed.
+C.semg_gate_fast_fc_Hz=4;% corner of the gate's FAST path, which can only ever
+                         % OPEN the gate (the two paths are combined with max;
+                         % see rcflex_semg_intent_gate.m). 4 Hz costs ~56 ms of
+                         % group delay instead of the slow path's ~225 ms, which
+                         % is what lets the gate open during a voluntary
+                         % movement rather than after it. It exists because the
+                         % slow path alone degraded the 'reach' scenario to
+                         % 0.73-1.15 deg attitude RMS against 0.285 deg
+                         % IMU-only, across four sensor seeds.
+C.semg_gate_fast_floor_deg=1.17;% half-power point for the fast path, in the same
+                         % equivalent-wrist-angle units and set by the SAME
+                         % geometric-mean rule as the slow floor, but measured
+                         % at 4 Hz where more tremor-driven activation
+                         % survives: tremor-only <=0.676 deg, intent-bearing
+                         % >=2.016 deg, only 3.0:1 against the slow path's
+                         % 6.3:1. Higher than the slow floor precisely because
+                         % that extra leakage is real and must be priced in
+                         % rather than ignored. The cost is paid in TREMOR
+                         % suppression, not in voluntary motion: the worst
+                         % tremor-only case now reads 0.063 instead of 0.019,
+                         % so the intent process noise closes to about 1/16
+                         % rather than 1/53. Re-derived by
+                         % calibrate_rcflex_semg_intent.m.
+C.semg_gate_attack_s=.05;% ATTACK window on the mean-square drive. Short: the
+                         % gate must be open before the limb has moved, and the
+                         % 35-40 ms electromechanical lead the sEMG carries is
+                         % the entire budget for that, so the attack is kept
+                         % inside it.
+C.semg_gate_release_s=1; % RELEASE window, deliberately 20x the attack -- see
+                         % rcflex_semg_intent_gate.m. Wrongly closing the gate
+                         % suppresses voluntary movement; wrongly holding it
+                         % open only reverts to the ungated baseline, so the
+                         % two errors do not cost the same. It also stops the
+                         % confidence collapsing at the zero crossings of a
+                         % reciprocating voluntary movement, where drive
+                         % magnitude passes through zero but intent VELOCITY is
+                         % at its maximum (measured: pitch confidence fell to
+                         % 0.40 at each crossing of benchmark case 9).
+C.semg_gate_warmup_s=1;  % the gate publishes full confidence for this long
+                         % after start-up, so it can never assert an absence of
+                         % voluntary drive before its own filters have settled.
+                         % Set from the 2 % settling time of the 1 Hz 2-pole
+                         % gate lowpass (~3/(pi*fc) = 0.95 s), not from any
+                         % result. Its accumulators keep running underneath, so
+                         % there is no release lag when it takes over.
+C.semg_gate_floor_deg=.83;% half-power point of the confidence, as an equivalent
+                         % voluntary wrist angle. Set by the SAME rule as
+                         % C.semg_fuse_floor -- the geometric mean of the two
+                         % measured classes -- from the drive magnitudes
+                         % measured across all 20 benchmark cases: tremor-only
+                         % <=0.331 deg, intent-bearing >=2.088 deg (6.3:1),
+                         % geometric mean 0.831 deg. Measured BEFORE any
+                         % closed-loop run and not fitted to one.
+C.semg_gate_exponent=2;  % see rcflex_semg_intent_gate.m: matches the gate's
+                         % output range to the measured 1.7 decades of class
+                         % separation.
+C.semg_gate_q_min=.01;   % floor on the intent-Q scale. Numerical safeguard
+                         % only -- the gate's closed confidence is 0.0187
+                         % (1/53) on the worst tremor-only case, so it does not
+                         % bind on any measured case.
+C.semg_gate_fixed_conf=.0187;% ONLY read by 'intent_gate_fixed'. Default equals
+                         % the gate's measured CLOSED confidence, so the
+                         % ablation applies the same Q reduction the sEMG arm
+                         % applies on a tremor-only case -- but unconditionally,
+                         % which is the whole point of the comparison.
+% Calibration: envelope-difference volts -> equivalent voluntary joint angle
+% (rad), per axis [roll; pitch]. Fitted by least squares on a TREMOR-FREE
+% voluntary trial scored against the IMU-observable handle attitude, on a seed
+% held out from the benchmark -- a procedure that is realisable on a real
+% subject and needs no ground-truth decomposition, which is what keeps the
+% interface usable when a real synchronised recording replaces the synthetic
+% source. Re-derive with src/analysis/calibrate_rcflex_semg_intent.m.
+C.semg_gate_cal_rad_per_V=[130.86;85.98];
 % Trust gate (NIS-based). n_lo/n_hi bracket the expected NIS (=2, measurement dim).
 C.ekf_nis_tau_s=.05;C.ekf_nis_lo=4;C.ekf_nis_hi=25;C.ekf_q_boost=50;
 % Predictive authority manager.

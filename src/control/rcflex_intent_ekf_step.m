@@ -1,4 +1,4 @@
-function [s,ref,info]=rcflex_intent_ekf_step(s,hand,C,semgOmega)
+function [s,ref,info]=rcflex_intent_ekf_step(s,hand,C,semgOmega,intentConf)
 % Pure function, no persistent variables (determinism required by
 % tests/test_rcflex_intent_ekf.m and tests/test_rcflex_control.m).
 %
@@ -10,6 +10,11 @@ function [s,ref,info]=rcflex_intent_ekf_step(s,hand,C,semgOmega)
 % ref  : [pitch;roll] lead-predicted voluntary intent (rad), matching the
 %        convention the notch-chain `ref` used so it drops straight into
 %        Rd=rx(ref(2))*ry(ref(1)) unchanged.
+% intentConf : OPTIONAL 2x1 voluntary-drive confidence in [0,1], [roll; pitch],
+%        from rcflex_semg_intent_gate. Scales the intent process noise per
+%        axis. Omitted or [] leaves Q exactly as it was, so every IMU-only
+%        result is bit-identical.
+%
 % info : [omega_hat_Hz; nis_bar; gamma_trust; 0; 0]. The last two slots are
 %        reserved (they carried an independent frequency observable in an
 %        experiment that has since been reverted); the diagnostic vector width
@@ -103,6 +108,53 @@ Qeff=E.Q;boost=1+C.ekf_q_boost*(1-gammaTrustPrev);
 ivel=[idx.thdx idx.thdy];
 if E.ca;ivel=[idx.accx idx.accy];end
 Qeff(ivel,ivel)=Qeff(ivel,ivel)*boost;
+% --- sEMG intent gate (C.semg_fusion='intent_gate*') ------------------------
+% The one place sEMG changes the estimator. It scales the intent process noise
+% per axis by the measured voluntary muscle drive: with no voluntary drive the
+% intent states lose the freedom to oscillate, so off-harmonic tremor the
+% {omega,2*omega} basis cannot represent is left in the residual (where the
+% controller rejects it as a disturbance) instead of being absorbed into the
+% reference as if it were voluntary motion.
+%
+% Applied AFTER the NIS trust boost and multiplying it, so the gate scales the
+% boost down as well as the base process noise.
+%
+% THE OBVIOUS OBJECTION WAS TESTED AND IS MOOT. The objection: a fast voluntary
+% movement is exactly what makes NIS spike, so a gate that has not yet detected
+% the movement would veto the one mechanism that could have caught it. The
+% alternative was implemented -- splitting the boost into its base and
+% transient parts and gating only the base, Qeff = q_intent*(gate + boost - 1),
+% so the transient part survives any gate -- and run on the 'reach' scenario at
+% a matched sensor seed. Both forms produced the SAME result to four
+% significant figures (5.21 % suppression, 0.9478 deg RMS).
+%
+% That identity is the finding: the boost is not firing at all during a fast
+% voluntary movement, so which way it combines with the gate cannot matter.
+% gamma_trust stays near 1 because intent + tremor still reconstruct the
+% measurement accurately even while the decomposition is wrong -- the same NIS
+% blindness documented in Sec 1 of docs/SEMG_INTENT_FUSION.md, and the reason
+% this fusion exists at all. The residual cannot rescue voluntary onset, and
+% the multiplicative form is kept because it is the simpler of two equivalents.
+%
+% (An earlier note here claimed the two forms differed by 20 points. That
+% comparison was run at two different sensor seeds and was wrong; the matched
+% comparison above replaces it.)
+%
+% The fast-voluntary-onset cost is real and is addressed in the GATE instead,
+% by its two-speed structure -- see rcflex_semg_intent_gate.m and
+% docs/SEMG_INTENT_FUSION.md Sec 4.3/9.
+%
+% The floor is a numerical safeguard only. The ceiling experiment
+% (docs/SEMG_INTENT_FUSION.md Sec 2) showed the benefit saturates by a scale of
+% 1/64, and the gate's own closed value is about 1/16 once the fast path's
+% floor is included, so C.semg_gate_q_min at 0.01 does not bind on any measured
+% case.
+if nargin>=5&&~isempty(intentConf)
+ qMin=.01;
+ if isfield(C,'semg_gate_q_min');qMin=C.semg_gate_q_min;end
+ qScale=max(min(max(intentConf(:),0),1),qMin);
+ for a=1:2;Qeff(ivel(a),ivel(a))=Qeff(ivel(a),ivel(a))*qScale(a);end
+end
 if E.osc2
  % Starve the second oscillator when there is no low-band tremor to track.
  gi=[E.q3x_ix E.om2_ix(1)];gj=[E.q3y_ix E.om2_ix(2)];

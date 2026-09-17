@@ -28,26 +28,63 @@ if isfield(C,'ekf')&&isfield(C.ekf,'s_len');gammaIx=max(328,100+C.ekf.s_len+1);e
 semgOn=isfield(C,'semg_enabled')&&C.semg_enabled&&isfield(C,'semg');
 % C.semg_fusion is the ONLY switch selecting the fusion arm. 'off' leaves the
 % z layout, the EKF call and every number downstream exactly as they were.
+%
+% Read INDEPENDENTLY of C.semg_enabled. The 'intent_gate_fixed' ablation is a
+% change to the EKF alone and must run with no sEMG subsystem at all -- that is
+% exactly what makes it an IMU-only control group. Gating the switch on
+% semg_enabled silently turned that arm back into the baseline and made the
+% ablation look identical to the control.
 fuseMode='off';
-if semgOn&&isfield(C,'semg_fusion')&&~isempty(C.semg_fusion);fuseMode=C.semg_fusion;end
-fuseOn=~strcmp(fuseMode,'off');
-semgIx=[];fuseIx=[];
+if isfield(C,'semg_fusion')&&~isempty(C.semg_fusion);fuseMode=C.semg_fusion;end
+% Two families of fusion arm exist and are mutually exclusive:
+%   omega arms  ('semg','oracle')        -- experiment E1, frequency observable
+%                                           on EKF state 13. Kept for the record;
+%                                           its result was negative.
+%   intent arms ('intent_gate','intent_gate_fixed') -- experiment E2, voluntary-
+%                                           drive confidence scaling the intent
+%                                           process noise. 'intent_gate' is the
+%                                           shipped sEMG+IMU system;
+%                                           'intent_gate_fixed' is its IMU-only
+%                                           ablation, which applies the same
+%                                           mechanism at a CONSTANT confidence
+%                                           and so needs no sEMG at all.
+omegaOn=any(strcmp(fuseMode,{'semg','oracle'}));
+gateOn=any(strcmp(fuseMode,{'intent_gate','intent_gate_fixed'}));
+if ~strcmp(fuseMode,'off')&&~omegaOn&&~gateOn
+ error('SensoSpoon:SemgFusion','Unknown C.semg_fusion: %s',fuseMode);
+end
+% The fixed-confidence ablation is an EKF-only change, so it must run whether or
+% not the sEMG subsystem is enabled -- that is what makes it an IMU-only control.
+gateStateOn=gateOn&&semgOn&&~strcmp(fuseMode,'intent_gate_fixed');
+% Arms that need the stream must say so loudly rather than degrading into the
+% baseline, which is how the first run of the ablation went unnoticed.
+assert(~any(strcmp(fuseMode,{'semg','intent_gate'}))||semgOn,...
+ 'SensoSpoon:SemgFusion','C.semg_fusion=''%s'' needs C.semg_enabled=true.',fuseMode);
+semgIx=[];fuseIx=[];gateIx=[];
 if semgOn;semgIx=gammaIx+(1:C.semg.s_len);end
-if fuseOn;fuseIx=semgIx(end)+(1:C.semg.s_len_fuse);end
+if omegaOn&&semgOn;fuseIx=semgIx(end)+(1:C.semg.s_len_fuse);end
+if gateStateOn
+ base=semgIx;if ~isempty(fuseIx);base=fuseIx;end
+ gateIx=base(end)+(1:C.semg.s_len_gate);
+end
 nz=max(400,gammaIx);
 if semgOn;nz=max(nz,semgIx(end));end
-if fuseOn;nz=max(nz,fuseIx(end));end
+if ~isempty(fuseIx);nz=max(nz,fuseIx(end));end
+if ~isempty(gateIx);nz=max(nz,gateIx(end));end
 if isempty(z)
  z=zeros(nz,1);z(1:18)=[reshape(eye(3),9,1);reshape(eye(3),9,1)];z(91:99)=reshape(eye(3),9,1);z(gammaIx)=1;
  if isfield(C,'algorithm')&&strcmp(C.algorithm,'ekf_predictive')
   z(100+(1:C.ekf.s_len))=C.ekf.s0;
  end
  if semgOn;z(semgIx)=C.semg.s0;end
- if fuseOn;z(fuseIx)=C.semg.s0_fuse;end
+ if ~isempty(fuseIx);z(fuseIx)=C.semg.s0_fuse;end
+ if ~isempty(gateIx);z(gateIx)=C.semg.s0_gate;end
 end
-% sEMG runs before the reference branch so its features are available to a
-% future estimator without moving anything. Today nothing downstream reads
-% semgFeat -- it goes to the diagnostic vector only.
+% sEMG preprocessing runs before the reference branch because the reference
+% branch now depends on it: under C.semg_fusion='intent_gate' the gate below
+% reads semgFeat(1:nch), the envelope features, and its confidence scales the
+% EKF's intent process noise. On every other arm semgFeat still goes only to
+% the diagnostic vector and changes nothing downstream.
 semgFeat=zeros(8,1);
 if semgOn&&~isempty(semgBlock)
  [semgState,feat]=rcflex_semg_preprocess(z(semgIx),semgBlock,C);
@@ -57,7 +94,7 @@ end
 % path except an explicitly selected fusion arm, and the EKF step treats [] as
 % "no pseudo-measurement", so the IMU-only result is untouched.
 semgOmega=[];semgOmegaHz=0;semgConf=0;
-if fuseOn
+if omegaOn
  switch fuseMode
   case 'semg'
    if ~isempty(semgBlock)
@@ -71,8 +108,22 @@ if fuseOn
    % poor" from "omega was never the binding constraint".
    semgOmegaHz=C.semg_fusion_oracle_Hz;semgConf=1;
    semgOmega=[2*pi*semgOmegaHz;1];
-  otherwise
-   error('SensoSpoon:SemgFusion','Unknown C.semg_fusion: %s',fuseMode);
+ end
+end
+% Voluntary-drive confidence for the EKF intent process noise (experiment E2).
+% intentConf stays [] on every path except an explicitly selected intent arm,
+% and the EKF step treats [] as "leave Q alone", so the IMU-only results are
+% untouched.
+intentConf=[];
+if gateOn
+ if strcmp(fuseMode,'intent_gate_fixed')
+  % IMU-only ablation: the same Q scaling held at a constant. This is the
+  % control that shows what the MECHANISM achieves without the SENSOR, and
+  % therefore what the sEMG stream is actually worth.
+  intentConf=C.semg_gate_fixed_conf*[1;1];
+ elseif ~isempty(gateIx)&&~isempty(semgBlock)
+  [gateState,intentConf]=rcflex_semg_intent_gate(z(gateIx),semgFeat(1:C.semg.nch),C);
+  z(gateIx)=gateState;
  end
 end
 R=cell(2,1);omega=zeros(3,2);
@@ -92,18 +143,23 @@ hand=[atan2(Rh(3,2),Rh(2,2));atan2(Rh(1,3),Rh(1,1))];
 % (guard, error, PID, feedforward, allocator) is common to both algorithms.
 if strcmp(C.algorithm,'ekf_predictive')
  ekfIx=100+(1:C.ekf.s_len);
- [ekfSlice,refIntent,ekfInfo]=rcflex_intent_ekf_step(z(ekfIx),hand,C,semgOmega);
+ [ekfSlice,refIntent,ekfInfo]=rcflex_intent_ekf_step(z(ekfIx),hand,C,semgOmega,intentConf);
  z(ekfIx)=ekfSlice;
  gammaTrust=ekfInfo(3);handRaw=hand([2 1]);
  blended=gammaTrust*refIntent+(1-gammaTrust)*handRaw;
  [gammaAuth,iPred]=rcflex_authority_manager(z(gammaIx),hand,ekfSlice(1:13),H,B,C);
  z(gammaIx)=gammaAuth;
  ref=handRaw+gammaAuth*(blended-handRaw);
- % Slots 6:7 carried the Sec 1a frequency observable before it was reverted and
- % have read zero since. The sEMG observable is the same quantity from a
- % different sensor, so it reuses them: the diagnostic stays 32 wide and no
- % Simulink port width changes. Both read zero when C.semg_fusion='off'.
- ekfDiag=[ekfInfo(1);ekfInfo(2);gammaTrust;gammaAuth;iPred;semgOmegaHz;semgConf;0];
+ % Slots 6:7 carry WHICHEVER sEMG observable the active fusion arm produces, so
+ % the diagnostic stays 32 wide and no Simulink port width changes:
+ %   'semg'/'oracle'  -> [tremor frequency (Hz), burst-power confidence]
+ %   'intent_gate*'   -> [roll voluntary-drive confidence, pitch confidence]
+ % Both read zero when C.semg_fusion='off'. The intent confidences invert to
+ % the underlying mean-square drive as P = gate_floor*conf^(1/exponent) /
+ % (1-conf^(1/exponent)), so nothing is lost by publishing the confidence only.
+ semgObs=[semgOmegaHz;semgConf];
+ if ~isempty(intentConf);semgObs=intentConf(:);end
+ ekfDiag=[ekfInfo(1);ekfInfo(2);gammaTrust;gammaAuth;iPred;semgObs;0];
 else
  % Causal fixed IIR sections. Coefficients are prepared before execution.
  ref=hand([2 1]);

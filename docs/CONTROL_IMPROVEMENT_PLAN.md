@@ -685,3 +685,35 @@ It does **not** license a fusion design yet, and these caveats are load-bearing:
   and the need for AC coupling ahead of gain.
 - Zhou, Y., Jenkins, M. E., Naish, M. D., & Trejos, A. L. (2018). Multi-sensor fusion for
   tremor estimation. — prior art on combining sEMG with inertial sensing for tremor.
+
+---
+
+## 11. sEMG + IMU fusion — done, and where it lives
+
+Sec 10.6 above said the evidence did not yet license a fusion design. Two fusion experiments
+have since been run and the design question is settled. **The full write-up is
+`docs/SEMG_INTENT_FUSION.md`**; this section records only the outcome and the correction to
+Sec 10.6.
+
+- **E1 — sEMG → ω** (`C.semg_fusion='semg'`). Acts on exactly the observable Sec 10.6
+  recommended, the burst-band frequency. **Negative.** A perfect-ω oracle bought only +7.9
+  points on case 9, so ω was never the binding constraint; and the burst-band estimator is
+  biased (9.15 Hz against a true 8 Hz), regressing 4 of 5 in-band sine cases. Retained in the
+  tree as the record.
+- **E2 — sEMG → intent process noise** (`C.semg_fusion='intent_gate'`). **Positive, and
+  shipped.** The agonist/antagonist envelope difference gives a voluntary-drive magnitude
+  that separates tremor-only from intent-bearing cases 6.3 : 1; that confidence scales the
+  intent states' process noise per axis and per sample.
+
+**Sec 10.6 was wrong on one point, and the correction matters.** It concluded that "the
+discriminating feature is the burst band, not the envelope" and that envelope amplitude
+"correlates with voluntary intent but not usefully against tremor". The second half of that
+sentence is the useful half and was written off: *not correlating with tremor is precisely
+what makes the envelope a voluntary-intent discriminator*. The burst band is the better
+**tremor** feature and the envelope is the better **intent** feature, and the failure that
+remained in the estimator was an intent failure, not a tremor one. E1 pursued the tremor
+feature and returned nothing; E2 pursued the intent feature and worked.
+
+The caveats in Sec 10.6 about the synthetic source are **unchanged and still binding**. E2 is
+an algorithmic result in simulation. `SEMG_INTENT_FUSION.md` §8 states the falsifiable
+targets a real recording must hit before any of it transfers.

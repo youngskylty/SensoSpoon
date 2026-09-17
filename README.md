@@ -16,6 +16,10 @@ S = START_PROJECT('control')    % Native closed-loop simulation, plots, and anim
 START_PROJECT('soup')           % Recompute with 5 mL of liquid and generate a comparison
 START_PROJECT('compare')        % Side-by-side animation from saved native results
 START_PROJECT('benchmark')      % Independent closed-loop tests and hardware-utilization report
+%   -> then: summarise_rcflex_benchmark(); plot_rcflex_benchmark('final')
+%   Arms: simple_pid (baseline) | ekf_cv (IMU-only EKF) | ekf_cv_semg (sEMG+IMU).
+%   ekf_cv_qfix is the IMU-only ablation of the sEMG mechanism; see
+%   docs/SEMG_INTENT_FUSION.md.
 START_PROJECT('analysis')       % Inverse-dynamics demands under ideal tracking and adverse parameters
 START_PROJECT('all')            % Rebuild, validate, preview, simulate, and animate
 ```

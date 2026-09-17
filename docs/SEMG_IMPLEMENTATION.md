@@ -37,12 +37,19 @@ control or estimation path.
 | `C.semg_source` | `'synthetic'` (`'file'` implemented, `'device'` not) |
 | `C.ekf_osc2` | **`false`** |
 | `C.algorithm` | `'simple_pid'` |
-| EKF | **unmodified**; no sEMG in the measurement model or state vector |
-| sEMG/IMU fusion | **none** |
+| EKF | state vector and measurement model **unmodified** (still 13 states, still IMU-only attitude); the sEMG gate scales the intent **process noise** only |
+| sEMG/IMU fusion | **IMPLEMENTED** — `C.semg_fusion='intent_gate'`, see `docs/SEMG_INTENT_FUSION.md`. Experiment E1 (`'semg'`, sEMG→ω) is retained as a recorded negative result. |
 | IMU-only baseline | **unchanged** — 94.9769 % suppression, 0.050225° RMS (`sine`, 8 Hz, 1°/axis, seed 1701), verified bit-identical to the pre-sEMG code |
 | Frequency-estimation experiment (§1a lag-autocorrelation) | **reverted**; packed EKF slice back to 183 elements, `info(4:5)` read zero |
-| sEMG subsystem | **standalone** |
-| Validation | 14/14 groups pass (`tests/run_validation.m`) |
+| sEMG subsystem | **fused** (algorithmically, in simulation); still standalone with respect to real data |
+| Validation | 15/15 groups pass (`tests/run_validation.m`) |
+
+> **This section described the pre-fusion state and has been updated.** The staged plan in
+> §13–§14 was written when no fusion existed. Fusion has since been designed, implemented,
+> ablated and benchmarked against a **synthetic** source — an algorithmic result only. The
+> real-data gate in §14 is **still open and still required**; nothing in the fusion work
+> discharges it. See `docs/SEMG_INTENT_FUSION.md` §8 for the falsifiable targets a real
+> recording has to hit.
 
 With `C.semg_enabled = false` the system is byte-identical to the pre-sEMG code: no sEMG is
 generated, no extra state is carried, and diagnostic slots 25–32 read zero.
@@ -390,15 +397,20 @@ Ordered by how much they could cost.
 
 ## 13. Deliberately not implemented
 
+> **Superseded in part.** The first two rows below were written before the fusion stage and
+> are no longer accurate; they are kept, struck through, with what actually happened. Every
+> other row still holds.
+
 | Not done | Why |
 |---|---|
-| **IMU + sEMG fusion** | Requires the §14 evidence first |
-| **Any EKF change** | Measurement model and state vector untouched until real data says what to fuse |
+| ~~**IMU + sEMG fusion**~~ | **DONE** in simulation — `C.semg_fusion='intent_gate'`. The §14 real-data gate remains open; the fusion result is explicitly conditional on it (`SEMG_INTENT_FUSION.md` §8). |
+| ~~**Any EKF change**~~ | The measurement model and state vector are **still** untouched. What changed is the intent **process noise**, scaled per axis by the sEMG voluntary-drive confidence — deliberately the weakest coupling that could work, because a magnitude observable cannot support a measurement. |
 | **`ekf_osc2 = true`** | Infrastructure exists and is tested; stays off |
 | **Controller / reference-path changes** | sEMG is not read by the reference path |
 | **Simulink sEMG port** | Would need a `.slx` change; deferred until the fusion design is decided. Noted in `rcflex_controller_sfun.m` |
 | **`C.semg_source = 'device'`** | No physical front end built |
 | **Frequency-estimation observable (§1a)** | Reverted; superseded as a question by sEMG |
+| **A calibrated intent-ANGLE pseudo-measurement** | Built, measured and rejected: 1.6–1.8° RMS error against a 0.02–0.18° effect. See `SEMG_INTENT_FUSION.md` §3.1. |
 
 ---
 

@@ -21,6 +21,19 @@ if strcmp(name,'mixed')||strcmp(name,'irregular')
 end
 if strcmp(name,'step');ramp=ramp.*(1+max(0,min(1,(t-duration/2)/.15)));end
 if strcmp(name,'intent')||strcmp(name,'combined');intent(:,1)=deg2rad(8)*ramp.*sin(2*pi*.2*t);intent(:,2)=deg2rad(5)*ramp.*sin(2*pi*.25*t+.2);end
+% 'reach': a FAST voluntary movement superimposed on tremor. Every other
+% intent-bearing scenario drives intent at 0.2-0.25 Hz, which a slow estimator
+% can track by being slow; nothing in the 20-case benchmark asks whether a
+% voluntary movement is preserved when it happens QUICKLY. That is exactly the
+% question the sEMG intent gate has to answer -- the gate must open before the
+% limb has moved, which is what the electromechanical delay is for -- so the
+% scenario exists to test it. Minimum-jerk profile, 0.8 s, starting at t=2 s so
+% it falls inside the metrics' t>=1.5 s scoring window with time either side.
+% Additive: no existing scenario name changes behaviour.
+if strcmp(name,'reach')
+ uR=max(0,min(1,(t-2)/.8));sR=10*uR.^3-15*uR.^4+6*uR.^5;
+ intent(:,1)=deg2rad(8)*ramp.*sR;intent(:,2)=deg2rad(5)*ramp.*sR;
+end
 if ~strcmp(name,'intent');tremor(:,1:2)=deg2rad(amplitude)*ramp.*shape;end
 if strcmp(name,'combined')||strcmp(name,'irregular');pos=.001*ramp.*[.5*sin(2*pi*hz*t+.2),.3*sin(2*pi*hz*t+1.1),sin(2*pi*hz*t-.4)];end
 angles=intent(:,1:2)+tremor(:,1:2);rate=deriv(angles,dt);acc=deriv(rate,dt);pv=deriv(pos,dt);pa=deriv(pv,dt);
