@@ -479,10 +479,23 @@ recording through the *identical* preprocessing, feature and gate code
   for `ekf_cv`, over four sensor seeds — better than the 0.99° the single-speed gate gave,
   but a real remaining regression of about 2.4×. The cause is irreducible within this design:
   the gate's detection latency is set by filter corners that exist to reject tremor-driven
-  activation, and trading them away costs the class separation the mechanism depends on. A
-  16-point sweep over the corner frequency and a drive-rate term found no setting meeting
-  both the 4 : 1 separation and the 350 ms onset criteria declared in advance, so no setting
-  was adopted. **The 20-case benchmark contains no fast voluntary movement, so the headline
+  activation, and trading them away costs the class separation the mechanism depends on.
+
+  This was re-examined properly as **experiment E3**
+  (`src/analysis/run_fast_movement_experiment.m`, `START_PROJECT('fastmove')`), comparing the
+  shipped amplitude gate against a rate-of-change detector and against a hybrid, at four
+  swept corner frequencies, on the criteria declared in advance. **No candidate met both
+  criteria**, and the reason turned out to be structural rather than a matter of tuning: the
+  rate of muscle drive is largest for the *fastest* thing in the signal, and in a tremulous
+  hand that is the tremor, not the voluntary movement. Measured by the project's own
+  geometric-mean rule, the rate observable separates the two classes **the wrong way round**
+  — 0.69 : 1 at a 2 Hz corner falling to 0.13 : 1 at 16 Hz, against the ≥ 4 : 1 requirement.
+  A separating threshold exists at all only at the 2 Hz corner, where a fast reach peaks
+  2.3× above the worst tremor-only rate; at 4 Hz and above no threshold can separate them,
+  at any value. The best rate arm (2 Hz) does reach 349 ms, but its mean confidence on a
+  tremor-only record is 0.343 against the ≤ 0.10 the mechanism needs, so it would surrender
+  most of the `q_intent` swing that is the entire point of the gate. The target was
+  therefore not moved and no candidate was adopted. **The 20-case benchmark contains no fast voluntary movement, so the headline
   numbers in §7 do not reflect this cost** — which is precisely why `'reach'` exists and is
   reported separately. Anyone quoting the headline should quote this too.
 - **The gate is binary in spirit.** It distinguishes "voluntary drive present" from "absent".

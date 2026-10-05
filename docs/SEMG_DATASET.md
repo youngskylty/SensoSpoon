@@ -84,7 +84,10 @@ It is explicitly **not** a tremor dataset, and is not treated as one.
 | 3 | Raw cross-talk | ✅ **Yes — and this is the point** | Isolated wrist flexion and extension with 16 forearm sites, labelled `intent` |
 | 4 | sEMG lead | ❌ No | No accelerometer or IMU |
 | 5 | Frequency agreement | ❌ No | No mechanical reference |
-| 6 | Intent/tremor discrimination | ❌ No | Labels are voluntary/rest only; no tremor class |
+| 6 | Intent/tremor discrimination | ❌ No — but **partially bounded**, §6.3 | Labels are voluntary/rest only; no tremor class. Voluntary-vs-rest bounds the ratio from above, and that bound was measured |
+
+See also `docs/SEMG_PUBLIC_DATA_SURVEY.md` for the systematic survey of every other dataset
+considered, and why none of them closes stages 2, 4, 5 or 6.
 
 **Stage 3 is exactly the one that most needed real data.** It is the largest untested
 assumption in the design: the synthetic source generates its four channels independently, so
@@ -223,7 +226,42 @@ what the provisional 0.30 gate is derived from: it sits above the irreducible co
 floor, so it does not demand better than the instrumentation can deliver, and below
 adjacent-site placement, so it fails sloppy siting.
 
-### 6.3 The finding that matters
+### 6.3 A second finding: the differential envelope does not separate BOTH directions
+
+`src/analysis/validate_rcflex_semg_separation.m` (`START_PROJECT('realdata')`) pushes these
+same recordings through the **shipped intent gate's front end** and measures the drive the
+gate would actually see, by the same worst-case geometric-mean rule
+`calibrate_rcflex_semg_intent.m` uses on the synthetic source.
+
+| Condition, roll axis | P1 | P2 | Synthetic | Target |
+|---|---:|---:|---:|---:|
+| Wrist **flexion** vs rest | 10.1 : 1 | 5.1 : 1 | — | ≥ 4 : 1 |
+| Wrist **extension** vs rest | 2.5 : 1 | **0.46 : 1** | — | ≥ 4 : 1 |
+| Pooled worst case (the declared rule) | **0.8 : 1** | **0.1 : 1** | 6.3 : 1 | ≥ 4 : 1 |
+
+Flexion — the direction the agonist channel was selected for — behaves as designed.
+Extension does not, and because the rule takes the worst case, the pooled figure fails. Two
+mechanisms are visible in the data and **neither exists in the synthetic source**:
+
+1. **A standing DC offset in the differential envelope.** At rest, agonist − antagonist
+   should be ≈ 0. Measured, it is **7–20 % of a strong contraction's drive**, subject-
+   specific, and the rectify-and-lowpass envelope passes it straight through the gate's 1 Hz
+   filter. The synthetic source generates both channels with identical statistics, so its
+   resting difference really is ≈ 0.
+2. **Co-activation**, already visible as stage 3b's 0.63–0.78: the two muscles rise
+   *together*, so the difference cancels much of the drive whenever the antagonist leads.
+
+The hypothesis that the offset alone explains it **was tested and rejected** — subtracting
+the measured resting baseline lifts the pooled ratio only to 1.1 : 1 and 1.9 : 1.
+
+This is not a refutation of the fusion: these are hand gestures rather than wrist
+stabilisation, the channel pairs are chosen empirically, and the pitch pair is the
+substitute described in §5.2. It is, however, the first real-muscle evidence that the
+6.3 : 1 synthetic separation does not transfer in one of the two contraction directions, and
+it names two specific things the model omits. Both remain unfixed: see
+`docs/VALIDATION_STATUS.md` §2.2 and §4.
+
+### 6.4 The finding that matters
 
 **Placement, not physiology, is the binding constraint.** Agonist/antagonist channels sited on
 opposite aspects of the forearm achieve acceptable cross-talk; closely spaced ones do not, and
@@ -236,7 +274,7 @@ contractions. That is a physiological observation, not a defect, and it does not
 does mean the agonist/antagonist envelopes are *not* reciprocal here, which is worth carrying
 into the feature design.
 
-### 6.4 Caveats
+### 6.5 Caveats
 
 Measured on **healthy voluntary contractions**, not tremor; tremor may drive antagonist pairs
 more synchronously — in essential tremor the classic pattern is synchronous rather than
