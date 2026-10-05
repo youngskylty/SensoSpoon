@@ -13,8 +13,8 @@ Attitude scoring includes intention tracking error. Baseline: rigidly attached s
 | Arm | sEMG fusion | Mean suppression, all scored (%) | Mean suppression, feasible cases (%) | Worst feasible case (%) | Case 10 voluntary-motion RMS (deg) | Cases meeting 90% |
 |---|---|---:|---:|---:|---:|---:|
 | simple_pid | off | 64.19 | 90.23 | 51.51 | 0.4583 | 15 of 16 |
-| ekf_cv_legacy | off | 68.75 | 88.96 | 30.75 | 1.2390 | 11 of 16 |
 | ekf_cv | off | 71.03 | 92.12 | 85.88 | 0.2008 | 11 of 16 |
+| ekf_cv_legacy | off | 68.75 | 88.96 | 30.75 | 1.2390 | 11 of 16 |
 | ekf_cv_osc2 | off | 71.04 | 92.13 | 85.90 | 0.2008 | 11 of 16 |
 | ekf_cv_qfix | intent_gate_fixed | 65.62 | 85.18 | -41.41 | 3.0418 | 15 of 16 |
 | ekf_cv_semg | intent_gate | 72.63 | 93.04 | 85.31 | 0.2070 | 15 of 16 |
@@ -43,26 +43,6 @@ Attitude scoring includes intention tracking error. Baseline: rigidly attached s
 | simple_pid | 18 | sine | 9 | 1.0 | 0.085 | 91.5 | 0.87 | 0.74 | 1 | 1 |
 | simple_pid | 19 | sine | 11 | 1.0 | 0.094 | 90.6 | 0.88 | 0.85 | 1 | 1 |
 | simple_pid | 20 | sine | 20 | 1.0 | 2.967 | -196.7 | 3.26 | 1.35 | 0 | 0 |
-| ekf_cv_legacy | 1 | sine | 4 | 1.0 | 0.027 | 97.3 | 0.81 | 0.57 | 1 | 1 |
-| ekf_cv_legacy | 2 | sine | 8 | 1.0 | 0.062 | 93.8 | 0.84 | 0.70 | 1 | 1 |
-| ekf_cv_legacy | 3 | sine | 12 | 1.0 | 0.100 | 90.0 | 0.89 | 0.94 | 1 | 1 |
-| ekf_cv_legacy | 4 | sine | 6 | 3.0 | 0.235 | 92.2 | 2.46 | 0.84 | 1 | 1 |
-| ekf_cv_legacy | 5 | sine | 10 | 3.0 | 0.389 | 87.0 | 2.64 | 1.33 | 1 | 0 |
-| ekf_cv_legacy | 6 | mixed | 8 | 2.0 | 0.141 | 89.8 | 1.16 | 0.81 | 1 | 1 |
-| ekf_cv_legacy | 7 | chirp | 8 | 2.0 | 0.224 | 88.8 | 1.75 | 1.28 | 1 | 1 |
-| ekf_cv_legacy | 8 | irregular | 8 | 2.0 | 0.145 | 89.6 | 1.65 | 0.88 | 1 | 1 |
-| ekf_cv_legacy | 9 | combined | 8 | 1.0 | 0.692 | 30.7 | 1.53 | 1.33 | 1 | 1 |
-| ekf_cv_legacy | 10 | intent | 8 | 0.0 | 1.239 | NaN | 0.89 | 0.88 | 1 | 1 |
-| ekf_cv_legacy | 11 | sine | 8 | 1.0 | 0.074 | 92.6 | 0.83 | 0.63 | 1 | 1 |
-| ekf_cv_legacy | 12 | sine | 8 | 1.0 | 0.066 | 93.4 | 0.85 | 0.89 | 1 | 1 |
-| ekf_cv_legacy | 13 | sine | 8 | 1.0 | 0.062 | 93.8 | 0.84 | 0.70 | 1 | 1 |
-| ekf_cv_legacy | 14 | step | 8 | 5.0 | 19.879 | -119.1 | 21.68 | 1.43 | 0 | 0 |
-| ekf_cv_legacy | 15 | sine | 8 | 1.0 | 0.063 | 93.7 | 0.84 | 0.83 | 1 | 1 |
-| ekf_cv_legacy | 16 | sine | 5 | 1.0 | 0.017 | 98.3 | 0.81 | 0.60 | 1 | 1 |
-| ekf_cv_legacy | 17 | sine | 7 | 1.0 | 0.052 | 94.8 | 0.83 | 0.65 | 1 | 1 |
-| ekf_cv_legacy | 18 | sine | 9 | 1.0 | 0.069 | 93.1 | 0.85 | 0.74 | 1 | 1 |
-| ekf_cv_legacy | 19 | sine | 11 | 1.0 | 0.086 | 91.4 | 0.87 | 0.86 | 1 | 1 |
-| ekf_cv_legacy | 20 | sine | 20 | 1.0 | 1.850 | -85.0 | 1.99 | 1.35 | 0 | 0 |
 | ekf_cv | 1 | sine | 4 | 1.0 | 0.025 | 97.5 | 0.80 | 0.57 | 1 | 1 |
 | ekf_cv | 2 | sine | 8 | 1.0 | 0.062 | 93.8 | 0.84 | 0.70 | 1 | 1 |
 | ekf_cv | 3 | sine | 12 | 1.0 | 0.102 | 89.8 | 0.89 | 0.94 | 1 | 1 |
@@ -83,6 +63,26 @@ Attitude scoring includes intention tracking error. Baseline: rigidly attached s
 | ekf_cv | 18 | sine | 9 | 1.0 | 0.070 | 93.0 | 0.85 | 0.74 | 1 | 1 |
 | ekf_cv | 19 | sine | 11 | 1.0 | 0.087 | 91.3 | 0.87 | 0.86 | 1 | 1 |
 | ekf_cv | 20 | sine | 20 | 1.0 | 1.921 | -92.1 | 2.08 | 1.35 | 0 | 0 |
+| ekf_cv_legacy | 1 | sine | 4 | 1.0 | 0.027 | 97.3 | 0.81 | 0.57 | 1 | 1 |
+| ekf_cv_legacy | 2 | sine | 8 | 1.0 | 0.062 | 93.8 | 0.84 | 0.70 | 1 | 1 |
+| ekf_cv_legacy | 3 | sine | 12 | 1.0 | 0.100 | 90.0 | 0.89 | 0.94 | 1 | 1 |
+| ekf_cv_legacy | 4 | sine | 6 | 3.0 | 0.235 | 92.2 | 2.46 | 0.84 | 1 | 1 |
+| ekf_cv_legacy | 5 | sine | 10 | 3.0 | 0.389 | 87.0 | 2.64 | 1.33 | 1 | 0 |
+| ekf_cv_legacy | 6 | mixed | 8 | 2.0 | 0.141 | 89.8 | 1.16 | 0.81 | 1 | 1 |
+| ekf_cv_legacy | 7 | chirp | 8 | 2.0 | 0.224 | 88.8 | 1.75 | 1.28 | 1 | 1 |
+| ekf_cv_legacy | 8 | irregular | 8 | 2.0 | 0.145 | 89.6 | 1.65 | 0.88 | 1 | 1 |
+| ekf_cv_legacy | 9 | combined | 8 | 1.0 | 0.692 | 30.7 | 1.53 | 1.33 | 1 | 1 |
+| ekf_cv_legacy | 10 | intent | 8 | 0.0 | 1.239 | NaN | 0.89 | 0.88 | 1 | 1 |
+| ekf_cv_legacy | 11 | sine | 8 | 1.0 | 0.074 | 92.6 | 0.83 | 0.63 | 1 | 1 |
+| ekf_cv_legacy | 12 | sine | 8 | 1.0 | 0.066 | 93.4 | 0.85 | 0.89 | 1 | 1 |
+| ekf_cv_legacy | 13 | sine | 8 | 1.0 | 0.062 | 93.8 | 0.84 | 0.70 | 1 | 1 |
+| ekf_cv_legacy | 14 | step | 8 | 5.0 | 19.879 | -119.1 | 21.68 | 1.43 | 0 | 0 |
+| ekf_cv_legacy | 15 | sine | 8 | 1.0 | 0.063 | 93.7 | 0.84 | 0.83 | 1 | 1 |
+| ekf_cv_legacy | 16 | sine | 5 | 1.0 | 0.017 | 98.3 | 0.81 | 0.60 | 1 | 1 |
+| ekf_cv_legacy | 17 | sine | 7 | 1.0 | 0.052 | 94.8 | 0.83 | 0.65 | 1 | 1 |
+| ekf_cv_legacy | 18 | sine | 9 | 1.0 | 0.069 | 93.1 | 0.85 | 0.74 | 1 | 1 |
+| ekf_cv_legacy | 19 | sine | 11 | 1.0 | 0.086 | 91.4 | 0.87 | 0.86 | 1 | 1 |
+| ekf_cv_legacy | 20 | sine | 20 | 1.0 | 1.850 | -85.0 | 1.99 | 1.35 | 0 | 0 |
 | ekf_cv_osc2 | 1 | sine | 4 | 1.0 | 0.025 | 97.5 | 0.80 | 0.57 | 1 | 1 |
 | ekf_cv_osc2 | 2 | sine | 8 | 1.0 | 0.062 | 93.8 | 0.84 | 0.70 | 1 | 1 |
 | ekf_cv_osc2 | 3 | sine | 12 | 1.0 | 0.102 | 89.8 | 0.89 | 0.94 | 1 | 1 |

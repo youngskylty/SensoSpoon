@@ -1,7 +1,13 @@
-stage,status,value,threshold,note
-1 acquisition health,PASS,0,0.1,"clip%<0.1, headroom 18.6-27.2 dB, band_frac 0.98, mains -19.3 dB"
-2 burst SNR (dB),SKIPPED,NaN,6,"needs labels with a tremor-bearing and a tremor-free segment"
-3 paired cross-talk |r|,PASS,0.153409182070163,0.6,"roll -0.11, pitch 0.15; high r collapses the reciprocal-activation assumption"
-4 sEMG lead (ms),SKIPPED,NaN,10,"needs imu_accel + imu_fs"
-5 frequency agreement (Hz),SKIPPED,NaN,1,"needs imu_accel + imu_fs"
-6 intent/tremor discrimination,SKIPPED,NaN,2,"needs labels with both an intent-only and a tremor-bearing segment"
+stage,status,value,threshold,note,dataset
+1 acquisition health,PASS,0,0.1,"clip%<0.1, headroom 18.6-27.2 dB, band_frac 0.98, mains -19.3 dB",P1s1
+2 burst SNR (dB),SKIPPED,NaN,6,"needs labels with a tremor-bearing and a tremor-free segment",P1s1
+3 raw cross-talk |r|,FAIL,0.460244920968979,0.3,"worst of 12 isolated segment-axes, median 0.331; zero-lag raw |r|; PROVISIONAL gate, not a clinical limit",P1s1
+4 sEMG lead (ms),SKIPPED,NaN,10,"needs imu_accel + imu_fs",P1s1
+5 frequency agreement (Hz),SKIPPED,NaN,1,"needs imu_accel + imu_fs",P1s1
+6 intent/tremor discrimination,SKIPPED,NaN,2,"needs labels with both an intent-only and a tremor-bearing segment",P1s1
+1 acquisition health,PASS,0,0.1,"clip%<0.1, headroom 12.0-27.3 dB, band_frac 0.95, mains -20.6 dB",P2s1
+2 burst SNR (dB),SKIPPED,NaN,6,"needs labels with a tremor-bearing and a tremor-free segment",P2s1
+3 raw cross-talk |r|,PASS,0.26237355351596,0.3,"worst of 12 isolated segment-axes, median 0.129; zero-lag raw |r|; PROVISIONAL gate, not a clinical limit",P2s1
+4 sEMG lead (ms),SKIPPED,NaN,10,"needs imu_accel + imu_fs",P2s1
+5 frequency agreement (Hz),SKIPPED,NaN,1,"needs imu_accel + imu_fs",P2s1
+6 intent/tremor discrimination,SKIPPED,NaN,2,"needs labels with both an intent-only and a tremor-bearing segment",P2s1
