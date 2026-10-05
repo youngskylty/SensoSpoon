@@ -3,10 +3,11 @@
 // numbered lists, pipe tables, fenced code blocks, horizontal rules, and the
 // inline **bold** / *italic* / `code` forms.
 const fs = require('fs');
+const path = require('path');
 const {
   Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
   Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType,
-  LevelFormat, PageOrientation,
+  LevelFormat, PageOrientation, ImageRun,
 } = require('docx');
 
 const SRC = process.argv[2];
@@ -28,7 +29,11 @@ function runs(text, opts = {}) {
   // is bold-wrapped inline code, and a single non-recursive pass renders the
   // backticks literally.
   const walk = (s, style) => {
-    const re = /(`[^`]+`|\*\*[^*`]*(?:`[^`]+`[^*`]*)*\*\*|\*[^*\s][^*]*\*)/g;
+    // ~~struck through~~ is matched non-greedily, because these reports use it to
+    // retract a superseded claim and the retracted text routinely contains a lone
+    // tilde of its own ("~4x earlier detection"). A character class excluding ~
+    // would stop at that one and render the markers literally.
+    const re = /(`[^`]+`|~~.+?~~|\*\*[^*`]*(?:`[^`]+`[^*`]*)*\*\*|\*[^*\s][^*]*\*)/g;
     let last = 0, m;
     const push = (t, extra) => { if (t) out.push(new TextRun({ ...base, ...style, ...extra, text: t })); };
     while ((m = re.exec(s)) !== null) {
@@ -36,6 +41,10 @@ function runs(text, opts = {}) {
       const tok = m[0];
       if (tok.startsWith('`')) {
         push(tok.slice(1, -1), { font: MONO, size: base.size - 2, color: style.bold ? '0B5A66' : '0B5A66' });
+      } else if (tok.startsWith('~~')) {
+        // Struck through AND greyed: a retraction should read as retracted at a
+        // glance in print, where a thin strike line alone is easy to miss.
+        walk(tok.slice(2, -2), { ...style, strike: true, color: INK2 });
       } else if (tok.startsWith('**')) {
         walk(tok.slice(2, -2), { ...style, bold: true });
       } else {
@@ -118,6 +127,35 @@ const para = (text, o = {}) => new Paragraph({
   children: runs(text, o),
 });
 
+// ------------------------------------------------------------------- figures
+// PNG intrinsic size, straight from the IHDR chunk. The figures are exported at
+// 600 dpi, so their pixel dimensions are far larger than the printed size; only
+// the ASPECT RATIO is taken from here and the printed size is chosen below.
+function pngSize(file) {
+  const b = fs.readFileSync(file);
+  if (b.length < 24 || b.readUInt32BE(0) !== 0x89504e47) {
+    throw new Error(`Not a PNG: ${file}`);
+  }
+  return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) };
+}
+
+// Printed size in px at the 96 dpi the docx transformation assumes.
+// CONTENT_W twips is the text column; MAX_H keeps a tall single-column figure
+// from pushing its own caption onto the next page, which is what makes a figure
+// read as unrelated to the text that introduces it.
+const FIG_W = Math.round((CONTENT_W / 1440) * 96);   // 6.5 in -> 624 px
+const FIG_MAX_H = 430;                               // ~4.5 in
+function figureBox(file) {
+  const { w, h } = pngSize(file);
+  let width = FIG_W;
+  let height = Math.round(width * (h / w));
+  if (height > FIG_MAX_H) {
+    height = FIG_MAX_H;
+    width = Math.round(height * (w / h));
+  }
+  return { width, height };
+}
+
 while (i < lines.length) {
   const line = lines[i];
 
@@ -146,6 +184,28 @@ while (i < lines.length) {
       children: [new TextRun({ text: '' })],
     }));
     i++; continue;
+  }
+
+  // blockquote -> indented, left-ruled, slightly muted. These reports use it for
+  // the one sentence in a section that must survive being read in isolation, so
+  // it has to be visually distinct rather than folded into the body text.
+  if (/^\s*>/.test(line)) {
+    const block = [];
+    while (i < lines.length && /^\s*>/.test(lines[i])) {
+      const t = lines[i].replace(/^\s*>\s?/, '');
+      if (/^\s*$/.test(t)) { block.push(null); } else if (block.length && block[block.length - 1] !== null) {
+        block[block.length - 1] += ' ' + t.trim();
+      } else { block.push(t.trim()); }
+      i++;
+    }
+    const paras = block.filter(t => t !== null);
+    paras.forEach((t, k) => children.push(new Paragraph({
+      spacing: { before: k === 0 ? 140 : 60, after: k === paras.length - 1 ? 200 : 60, line: 276 },
+      indent: { left: 340, right: 220 },
+      border: { left: { style: BorderStyle.SINGLE, size: 12, color: '9AB0C4', space: 12 } },
+      children: runs(t, { color: INK2 }),
+    })));
+    continue;
   }
 
   // table
@@ -223,11 +283,45 @@ while (i < lines.length) {
     continue;
   }
 
+  // figure: ![caption](path). The caption may itself contain inline markdown and
+  // parentheses, so the path is taken as the LAST parenthesised group on the
+  // line rather than the first. Caption goes BELOW the image, per IEEE practice.
+  const fig = /^!\[(.*)\]\((.+)\)\s*$/.exec(line.trim());
+  if (fig) {
+    const rel = fig[2].trim();
+    const file = path.resolve(path.dirname(SRC), rel);
+    if (!fs.existsSync(file)) {
+      throw new Error(`Figure not found: ${rel}
+  resolved to ${file}
+  referenced by ${SRC}`);
+    }
+    const box = figureBox(file);
+    children.push(new Paragraph({
+      spacing: { before: 240, after: 80 },
+      alignment: AlignmentType.CENTER,
+      children: [new ImageRun({
+        type: 'png',
+        data: fs.readFileSync(file),
+        transformation: box,
+      })],
+    }));
+    if (fig[1].trim()) {
+      children.push(new Paragraph({
+        spacing: { before: 0, after: 260 },
+        alignment: AlignmentType.LEFT,
+        indent: { left: 160, right: 160 },
+        children: runs(fig[1].trim(), { size: 18, color: INK2 }),
+      }));
+    }
+    i++; continue;
+  }
+
   // paragraph (join wrapped lines)
   let text = line.trim();
   i++;
   while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^\s*[-#|>]/.test(lines[i])
-         && !/^```/.test(lines[i]) && !/^\s*\d+\.\s+/.test(lines[i])) {
+         && !/^```/.test(lines[i]) && !/^\s*\d+\.\s+/.test(lines[i])
+         && !/^\s*!\[/.test(lines[i])) {
     text += ' ' + lines[i].trim(); i++;
   }
   children.push(para(text));
