@@ -278,6 +278,38 @@ C.semg_gate_floor_deg=.83;% half-power point of the confidence, as an equivalent
                          % <=0.331 deg, intent-bearing >=2.088 deg (6.3:1),
                          % geometric mean 0.831 deg. Measured BEFORE any
                          % closed-loop run and not fitted to one.
+% --- Fast-movement detector (experiment E3). THE SINGLE SWITCH -------------
+% Which observable may OPEN the gate early. The SLOW amplitude path is common
+% to all three and is the only path that may ever CLOSE the gate, so this
+% chooses the early-detection mechanism and nothing else.
+%   'amplitude' the shipped two-speed gate: slow amplitude + FAST AMPLITUDE
+%               path (C.semg_gate_fast_*). Reference arm, and the default, so
+%               the shipped system is reproduced byte-for-byte unless this
+%               field is changed.
+%   'rate'      slow amplitude + RATE path. The fast amplitude path is
+%               replaced by the time derivative of the same filtered drive.
+%               Muscle drive RISES before it is LARGE, so a rate detector can
+%               in principle fire earlier; it also differentiates noise, which
+%               is why it gets its own floor rather than borrowing one.
+%   'hybrid'    slow amplitude + fast amplitude + rate, combined with max().
+%               Strictly more permissive than either, so it can only lower the
+%               latency and can only raise false triggering.
+% Compared under identical conditions by src/analysis/run_fast_movement_experiment.m.
+C.semg_gate_detector='amplitude';
+% The rate path is the DERIVATIVE OF THE EXISTING FAST PATH, deliberately: with
+% the same corner frequency, the only difference between arm A's early path and
+% arm B's is the differentiator, so a difference in the result is attributable
+% to the differentiator and to nothing else. The field exists so the corner can
+% be swept, and run_fast_movement_experiment sweeps it; it is not a free
+% parameter that was tuned until the answer looked good.
+C.semg_gate_rate_fc_Hz=C.semg_gate_fast_fc_Hz;
+% Half-power point of the rate path, as an equivalent voluntary wrist ANGULAR
+% VELOCITY. Set by the SAME geometric-mean rule as the two amplitude floors --
+% sqrt(max tremor-only x min intent-bearing) over the 20 benchmark cases, with
+% the 'reach' scenario HELD OUT so the threshold is not fitted to the case it
+% is later judged on. Re-derive with calibrate_rcflex_semg_intent.m; it is NaN
+% until that has been run, and the gate refuses to use an unset floor.
+C.semg_gate_rate_floor_deg_s=NaN;
 C.semg_gate_exponent=2;  % see rcflex_semg_intent_gate.m: matches the gate's
                          % output range to the measured 1.7 decades of class
                          % separation.
@@ -302,5 +334,30 @@ C.semg_gate_cal_rad_per_V=[130.86;85.98];
 C.ekf_nis_tau_s=.05;C.ekf_nis_lo=4;C.ekf_nis_hi=25;C.ekf_q_boost=50;
 % Predictive authority manager.
 C.auth_horizon_s=.02;C.auth_margin=.85;C.auth_rate_per_s=5;
+% Joint-travel branch of the authority manager. THE SINGLE SWITCH for the
+% repair recorded in rcflex_authority_manager.m: true is the repaired check,
+% false pins it at full authority and reproduces the pre-repair behaviour for
+% the controlled comparison in src/analysis/run_joint_travel_experiment.m.
+% Nothing else should ever set it false.
+C.auth_joint_check=true;
+% --- Recorded human tremor input -----------------------------------------
+% THE SINGLE SWITCH selecting a real tremor recording as the scenario's tremor
+% component. Empty (the default) means the synthetic generator is used and
+% nothing about the simulation changes, so every pre-existing result is
+% reproduced exactly. Set it to a tremordb record name -- 'g2rof.rit', say --
+% and run the 'recorded' scenario, and that recording's waveform drives the
+% hand instead of a sine. The conditioning and the claim it supports are
+% documented in src/control/rcflex_tremor_record.m; the amplitude is still
+% given by the scenario, because the recording supplies shape only.
+C.tremor_record='';
+% Band the recording is conditioned over, in Hz. The lower edge removes laser
+% transducer drift, the upper edge removes noise that integration would
+% amplify. Both sit outside the 3-12 Hz range every record's dominant peak
+% falls in, so neither edge is shaping the tremor itself.
+C.tremor_record_band=[2 25];
+% Seconds skipped at each end of a recording before a window is taken, so the
+% zero-phase filter's edge transients and the transducer's settling never enter
+% a scenario.
+C.tremor_record_offset_s=5;
 C.algorithm=algorithm;C.name=algorithm;
 end

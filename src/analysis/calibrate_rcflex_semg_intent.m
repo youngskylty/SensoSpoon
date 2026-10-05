@@ -54,16 +54,23 @@ amp=[1 1 1 3 3 2 2 2 1 0 1 1 1 5 1 1 1 1 1 1];
 % (rcflex_semg_intent_gate.m). Each needs its own floor, set by the same
 % geometric-mean rule at its own bandwidth -- the fast path passes more
 % tremor-driven activation, and that has to be priced in rather than ignored.
-rows=zeros(20,7);
+% The RATE path is measured on the same cases in the same pass, so its floor
+% comes from the same experiment as the two amplitude floors rather than from a
+% separate run with its own opportunity to drift. Its units are deg/s.
+rows=zeros(20,9);
 for k=1:20
  dur=4;if k==10;dur=8;end
  D=rcflex_control_case(names{k},dur,freq(k),amp(k),9100+k,C);
  uk=drive_volts(D,C,C.semg.gate_lp);
  uf=drive_volts(D,C,C.semg.gate_lp_fast);
+ ur=drive_volts(D,C,C.semg.gate_lp_rate);
+ ur=[zeros(1,2);diff(ur)]*fs;            % backward difference, as the gate forms it
  tk=(1:size(uk,1))'/fs;wk=tk>1.5;
  d=rad2deg(uk(wk,:).*gain(:)');df=rad2deg(uf(wk,:).*gain(:)');
+ dr=rad2deg(ur(wk,:).*gain(:)');
  hasIntent=rms(D.intent(D.time>1.5,1:2))>deg2rad(.1);
- rows(k,:)=[k rms(d(:,1)) rms(d(:,2)) rms(df(:,1)) rms(df(:,2)) any(hasIntent) 0];
+ rows(k,:)=[k rms(d(:,1)) rms(d(:,2)) rms(df(:,1)) rms(df(:,2)) any(hasIntent) 0 ...
+            rms(dr(:,1)) rms(dr(:,2))];
 end
 tremorOnly=rows(rows(:,6)==0,2:3);
 intentBearing=rows(rows(:,6)==1,2:3);
@@ -71,10 +78,13 @@ loMax=max(tremorOnly(:));hiMin=min(intentBearing(:));
 floorDeg=sqrt(loMax*hiMin);
 loMaxF=max(max(rows(rows(:,6)==0,4:5)));hiMinF=min(min(rows(rows(:,6)==1,4:5)));
 floorFastDeg=sqrt(loMaxF*hiMinF);
+loMaxR=max(max(rows(rows(:,6)==0,8:9)));hiMinR=min(min(rows(rows(:,6)==1,8:9)));
+floorRateDegS=sqrt(loMaxR*hiMinR);
 conf=@(p,fl)(p.^2./(p.^2+fl^2)).^C.semg_gate_exponent;
 rows(:,7)=max(conf(max(rows(:,2),rows(:,3)),floorDeg),conf(max(rows(:,4),rows(:,5)),floorFastDeg));
 R=array2table(rows,'VariableNames',{'case_id','drive_roll_deg','drive_pitch_deg',...
- 'fast_drive_roll_deg','fast_drive_pitch_deg','intent_present','confidence'});
+ 'fast_drive_roll_deg','fast_drive_pitch_deg','intent_present','confidence',...
+ 'rate_drive_roll_deg_s','rate_drive_pitch_deg_s'});
 R.scenario=string(names(:));R.frequency_Hz=freq(:);R.amplitude_deg=amp(:);
 fprintf('\nDRIVE MAGNITUDE, all 20 benchmark cases (RMS, equivalent wrist angle)\n');
 disp(R);
@@ -91,6 +101,26 @@ fprintf('  intent-bearing   min = %.4f deg\n',hiMinF);
 fprintf('  separation           = %.1f : 1\n',hiMinF/loMaxF);
 fprintf('  geometric mean       = %.4f deg  -> C.semg_gate_fast_floor_deg=%.2f;\n',floorFastDeg,floorFastDeg);
 fprintf('  confidence: %.4f (closed) / %.4f (open)\n',conf(loMaxF,floorFastDeg),conf(hiMinF,floorFastDeg));
+fprintf('RATE path (%.2f Hz, differentiated) -- the E3 candidate early detector\n',C.semg_gate_rate_fc_Hz);
+fprintf('  tremor-only      max = %.4f deg/s\n',loMaxR);
+fprintf('  intent-bearing   min = %.4f deg/s\n',hiMinR);
+fprintf('  separation           = %.1f : 1\n',hiMinR/loMaxR);
+fprintf('  geometric mean       = %.4f deg/s  -> C.semg_gate_rate_floor_deg_s=%.4f;\n',floorRateDegS,floorRateDegS);
+fprintf('  confidence: %.4f (closed) / %.4f (open)\n',conf(loMaxR,floorRateDegS),conf(hiMinR,floorRateDegS));
+if hiMinR<loMaxR
+ % Written to STDOUT, not stderr: this is a finding, not a MATLAB error, and
+ % routing it to stderr makes an ordinary run look like a failed one to any
+ % harness that watches stderr (it did, to the MATLAB MCP server).
+ fprintf(['  [!] SEPARATION IS INVERTED on this path: the tremor-only class reads HIGHER\n' ...
+            '      than the intent-bearing class, so the confidence labelled (closed) above is\n' ...
+            '      the TREMOR value and the one labelled (open) is the INTENT value. A gate\n' ...
+            '      built on this floor would open on tremor and close on voluntary motion.\n' ...
+            '      The floor is still printed because the rule is applied unchanged; it is\n' ...
+            '      the OBSERVABLE that fails here, not the rule.\n']);
+end
+fprintf(['  NOTE: the 20 benchmark cases drive voluntary motion at 0.2-0.25 Hz only. The\n' ...
+         '  ''reach'' scenario is deliberately NOT in this set, so this floor is derived\n' ...
+         '  without reference to the fast movement it is later judged on.\n']);
 
 if writeOutputs
  out=project_path('results','semg_intent_calibration.csv');
@@ -98,20 +128,9 @@ if writeOutputs
 end
 end
 function u=drive_volts(D,C,c)
-%DRIVE_VOLTS Lowpassed agonist-antagonist envelope difference, per axis, at the
-% outer-loop rate. Byte-for-byte the same chain rcflex_semg_intent_gate runs
-% online, so the constants fitted here are the constants the controller uses.
-% c selects which of the gate's two lowpass sections to apply.
+%DRIVE_VOLTS Thin wrapper on the shared rcflex_semg_gate_drive, kept so the call
+% sites in this script read as they did before that loop was factored out. The
+% loop lives in exactly one place now -- do not re-add it here.
 if nargin<3;c=C.semg.gate_lp;end
-F=rcflex_semg_features(D.semg,C,0);
-d=[F(:,1)-F(:,2), F(:,3)-F(:,4)];
-u=zeros(size(d));z=zeros(2,2);
-for k=1:size(d,1)
- for a=1:2
-  y=c(1)*d(k,a)+z(1,a);
-  z(1,a)=c(2)*d(k,a)-c(4)*y+z(2,a);
-  z(2,a)=c(3)*d(k,a)-c(5)*y;
-  u(k,a)=y;
- end
-end
+u=rcflex_semg_gate_drive(D.semg,C,c,0);
 end

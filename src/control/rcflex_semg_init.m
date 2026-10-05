@@ -72,12 +72,32 @@ if isfield(C,'semg_gate_floor_deg');gateFloorDeg=C.semg_gate_floor_deg;end
 if isfield(C,'semg_gate_exponent');gateExp=C.semg_gate_exponent;end
 if isfield(C,'semg_gate_warmup_s');gateWarm=C.semg_gate_warmup_s;end
 if isfield(C,'semg_gate_cal_rad_per_V');gateCal=C.semg_gate_cal_rad_per_V(:);end
+gateDetector='amplitude';gateRateFc=gateFcFast;gateRateFloorDegS=NaN;
+if isfield(C,'semg_gate_detector');gateDetector=C.semg_gate_detector;end
+if isfield(C,'semg_gate_rate_fc_Hz');gateRateFc=C.semg_gate_rate_fc_Hz;end
+if isfield(C,'semg_gate_rate_floor_deg_s');gateRateFloorDegS=C.semg_gate_rate_floor_deg_s;end
+assert(any(strcmp(gateDetector,{'amplitude','rate','hybrid'})),...
+ 'SensoSpoon:Semg','Unknown C.semg_gate_detector: %s (use amplitude, rate or hybrid)',gateDetector);
+rateOn=~strcmp(gateDetector,'amplitude');
+
 ixGateZ=1:4;                       % slow path: 2 biquad states x 2 axes
 ixGatePow=ixGateZ(end)+(1:2);      % slow path: one mean-square accumulator per axis
 ixGateZf=ixGatePow(end)+(1:4);     % fast path: 2 biquad states x 2 axes
 ixGatePowf=ixGateZf(end)+(1:2);    % fast path: one mean-square accumulator per axis
 ixGateK=ixGatePowf(end)+1;         % tick counter, for the warm-up window
-s0Gate=zeros(ixGateK,1);
+% RATE path state is allocated ONLY when a detector asks for it, so
+% C.semg_gate_detector='amplitude' leaves the packed gate state -- and
+% therefore the whole controller state vector, whose length derives from
+% s_len_gate -- exactly as it was before the rate detector existed.
+ixGateZr=[];ixGatePrev=[];ixGatePowr=[];
+last=ixGateK;
+if rateOn
+ ixGateZr=last+(1:4);              % rate path: 2 biquad states x 2 axes
+ ixGatePrev=ixGateZr(end)+(1:2);   % previous filtered drive, for the difference
+ ixGatePowr=ixGatePrev(end)+(1:2); % rate path: mean-square accumulator per axis
+ last=ixGatePowr(end);
+end
+s0Gate=zeros(last,1);
 
 C.semg=struct('nch',nch,'sub',sub,'hp',hp,'notch',notch,'env',env,'band',band,...
  'n_bq',nBq,'ix_z',ixZ,'s_len',s_len,'s0',s0,'n_feat',2*nch,...
@@ -93,7 +113,18 @@ C.semg=struct('nch',nch,'sub',sub,'hp',hp,'notch',notch,'env',env,'band',band,..
  'gate_warmup_n',round(gateWarm*C.outer_hz),...
  'ix_gate_z',ixGateZ,'ix_gate_pow',ixGatePow,...
  'ix_gate_zf',ixGateZf,'ix_gate_powf',ixGatePowf,'ix_gate_k',ixGateK,...
- 's_len_gate',ixGateK,'s0_gate',s0Gate);
+ 'gate_detector',gateDetector,'gate_rate_on',rateOn,...
+ 'gate_lp_rate',lowpass2(gateRateFc,C.outer_hz),...
+ 'gate_floor_rate',deg2rad(gateRateFloorDegS)^2,...
+ 'ix_gate_zr',ixGateZr,'ix_gate_prev',ixGatePrev,'ix_gate_powr',ixGatePowr,...
+ 's_len_gate',last,'s0_gate',s0Gate);
+% A detector that reads the rate floor may not run on an unset one: an
+% unmeasured threshold silently behaving like zero would open the gate
+% permanently and look like a spectacular latency result.
+assert(~rateOn||isfinite(C.semg.gate_floor_rate),'SensoSpoon:Semg',...
+ ['C.semg_gate_detector=''%s'' needs C.semg_gate_rate_floor_deg_s, which is unset. ' ...
+  'Derive it with calibrate_rcflex_semg_intent.m and freeze it in ' ...
+  'rcflex_control_parameters.m.'],gateDetector);
 end
 function c=lowpass2(f,fs)
 k=tan(pi*f/fs);den=1+sqrt(2)*k+k*k;

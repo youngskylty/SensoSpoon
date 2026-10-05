@@ -69,12 +69,40 @@ d=[e(1)-e(2);e(3)-e(4)];
 % rather than ignored. It cannot close the gate and it cannot lower the
 % confidence, so the worst a false fast-path trigger can do is cost some tremor
 % suppression for a moment.
+% A THIRD, OPTIONAL EARLY PATH: the RATE of change of muscle drive.
+% Selected by C.semg_gate_detector ('amplitude' | 'rate' | 'hybrid'), the one
+% switch; 'amplitude' is the shipped arm and allocates no rate state at all, so
+% this block is inert by default. The rate path is the time derivative of the
+% SAME filtered drive the fast amplitude path uses, at the same corner, so the
+% only thing separating the two arms is the differentiator. Its argument is
+% that drive RISES before it is LARGE: a threshold on the derivative can be
+% crossed while the amplitude is still climbing toward its own threshold. Its
+% cost is that differentiation amplifies the noise the smoothing was there to
+% remove, which is why it carries its own floor, measured at its own bandwidth
+% by the same geometric-mean rule, rather than borrowing the amplitude floor.
+% Like the fast amplitude path it is combined with max() and can therefore only
+% ever OPEN the gate.
 Z=reshape(s(E.ix_gate_z),2,2);
 Zf=reshape(s(E.ix_gate_zf),2,2);
 u=zeros(2,1);uf=zeros(2,1);
 for a=1:2
  [u(a),Z(:,a)]=biquad(E.gate_lp,d(a),Z(:,a));
  [uf(a),Zf(:,a)]=biquad(E.gate_lp_fast,d(a),Zf(:,a));
+end
+ur=zeros(2,1);
+if E.gate_rate_on
+ Zr=reshape(s(E.ix_gate_zr),2,2);ur_filt=zeros(2,1);
+ for a=1:2
+  [ur_filt(a),Zr(:,a)]=biquad(E.gate_lp_rate,d(a),Zr(:,a));
+ end
+ % Backward difference at the outer rate. First tick reads zero rather than a
+ % step out of the zero initial state, which would otherwise fire the gate on
+ % sample one; the warm-up window covers the transient either way, and this
+ % keeps the signal honest during it.
+ ur=(ur_filt-s(E.ix_gate_prev))*C.outer_hz;
+ if s(E.ix_gate_k)==0;ur=zeros(2,1);end
+ s(E.ix_gate_prev)=ur_filt;
+ s(E.ix_gate_zr)=Zr(:);
 end
 
 % Calibrated to an equivalent voluntary joint angle so the floor below is a
@@ -87,6 +115,7 @@ end
 % gain, so they differ in bandwidth and delay but not in scale.
 drive=E.gate_cal(:).*u;
 driveFast=E.gate_cal(:).*uf;
+driveRate=E.gate_cal(:).*ur;   % equivalent voluntary angular velocity (rad/s)
 
 % Mean-square drive, tracked with an ASYMMETRIC envelope follower: a fast
 % attack and a slow release.
@@ -110,6 +139,13 @@ P=s(E.ix_gate_pow)+alpha.*(drive.^2-s(E.ix_gate_pow));
 alphaF=E.gate_alpha_rel*ones(2,1);
 alphaF(driveFast.^2>s(E.ix_gate_powf))=E.gate_alpha_att;
 Pf=s(E.ix_gate_powf)+alphaF.*(driveFast.^2-s(E.ix_gate_powf));
+Pr=zeros(2,1);
+if E.gate_rate_on
+ alphaR=E.gate_alpha_rel*ones(2,1);
+ alphaR(driveRate.^2>s(E.ix_gate_powr))=E.gate_alpha_att;
+ Pr=s(E.ix_gate_powr)+alphaR.*(driveRate.^2-s(E.ix_gate_powr));
+ s(E.ix_gate_powr)=Pr;
+end
 
 % Standard soft gate, the same form this codebase already uses for presence
 % detection (rcflex_semg_omega, and the osc2 gate in rcflex_intent_ekf_step):
@@ -122,8 +158,17 @@ Pf=s(E.ix_gate_powf)+alphaF.*(driveFast.^2-s(E.ix_gate_powf));
 % to the measured input range; it introduces no new threshold, only an
 % exponent, and the exponent is set by that measurement rather than by the
 % closed-loop outcome.
-conf=max((P./(P+E.gate_floor)).^E.gate_exponent, ...
-         (Pf./(Pf+E.gate_floor_fast)).^E.gate_exponent);
+confSlow=(P./(P+E.gate_floor)).^E.gate_exponent;
+confFast=(Pf./(Pf+E.gate_floor_fast)).^E.gate_exponent;
+switch E.gate_detector
+ case 'amplitude';conf=max(confSlow,confFast);
+ case 'rate'
+  confRate=(Pr./(Pr+E.gate_floor_rate)).^E.gate_exponent;
+  conf=max(confSlow,confRate);
+ case 'hybrid'
+  confRate=(Pr./(Pr+E.gate_floor_rate)).^E.gate_exponent;
+  conf=max(max(confSlow,confFast),confRate);
+end
 
 % WARM-UP: hold the gate fully OPEN until its own filter chain has settled.
 %

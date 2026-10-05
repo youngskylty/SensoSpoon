@@ -1,0 +1,6 @@
+function rcflex_axis_style(ax,S)
+%RCFLEX_AXIS_STYLE Apply the report figure style to one axes. See rcflex_figure_style.
+set(ax,'FontSize',S.font_tick,'XColor',S.ink,'YColor',S.ink,'Color','w', ...
+  'Box','off','TickDir','out','YGrid','on','XGrid','off','GridColor',S.grid, ...
+  'GridAlpha',1,'LineWidth',.5,'TickLength',[.006 .006],'Layer','top');
+end

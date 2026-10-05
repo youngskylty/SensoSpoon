@@ -36,13 +36,30 @@ for k=1:numel(tau)
  tremXdd=-omega^2*(x(idx.a1x)*c1+x(idx.b1x)*s1)-4*omega^2*(x(idx.a2x)*c2+x(idx.b2x)*s2);
  tremYdd=-omega^2*(x(idx.a1y)*c1+x(idx.b1y)*s1)-4*omega^2*(x(idx.a2y)*c2+x(idx.b2y)*s2);
  % Correction joint opposes tremor; axis map: q=[pitch;roll] <-> EKF [y;x].
- q  =max(min(-[tremY;tremX],C.joint_limit),-C.joint_limit);
+ % ORDERING (repaired 2026-09-17, was the V2/V3 "inoperative joint check"):
+ % qDemand is the RAW predicted correction and is what the travel check must
+ % see; q is that same demand clipped to the mechanism's travel and is what the
+ % inverse-dynamics helper must see, because current can only ever be spent on
+ % a reachable angle. Previously qPeak was taken from the clipped q, so the
+ % quantity compared against C.joint_limit had already been forced below
+ % C.joint_limit and gammaJoint could not fall under 1 for any input.
+ qDemand=-[tremY;tremX];
+ q  =max(min(qDemand,C.joint_limit),-C.joint_limit);
  qd =-[tremYd;tremXd];qdd=-[tremYdd;tremXdd];
  [iReq,~]=rcflex_required_current(q,qd,qdd,hand,zeros(2,1),zeros(2,1),zeros(9,1),H,B);
- iPeak=max(iPeak,max(abs(iReq)));qPeak=max(qPeak,max(abs(q)));
+ iPeak=max(iPeak,max(abs(iReq)));qPeak=max(qPeak,max(abs(qDemand)));
 end
 gammaCurrent=C.auth_margin*H.current_limit_A/max(iPeak,eps);
-gammaJoint=C.joint_limit/max(qPeak,eps);
+% C.auth_joint_check is THE SINGLE SWITCH for the travel branch. false pins
+% gammaJoint at 1, which reproduces the pre-repair behaviour EXACTLY -- the
+% defective ordering above could never make gammaJoint less than 1 either. It
+% is the control group for src/analysis/run_joint_travel_experiment.m, so the
+% before/after comparison stays reproducible without keeping broken code in the
+% tree. Default true; nothing but that experiment should set it false.
+jointCheck=true;
+if isfield(C,'auth_joint_check');jointCheck=C.auth_joint_check;end
+gammaJoint=1;
+if jointCheck;gammaJoint=C.joint_limit/max(qPeak,eps);end
 gammaRaw=min([1,gammaCurrent,gammaJoint]);
 gamma_auth=gamma_prev+max(min(gammaRaw-gamma_prev,C.auth_rate_per_s*dt),-C.auth_rate_per_s*dt);
 i_pred=iPeak;

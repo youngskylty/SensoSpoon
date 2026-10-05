@@ -34,11 +34,32 @@ if strcmp(name,'reach')
  uR=max(0,min(1,(t-2)/.8));sR=10*uR.^3-15*uR.^4+6*uR.^5;
  intent(:,1)=deg2rad(8)*ramp.*sR;intent(:,2)=deg2rad(5)*ramp.*sR;
 end
+% 'recorded': the tremor component comes from a real human recording instead of
+% the generator above. Selected by C.tremor_record, which is the only field that
+% has to change; with it empty nothing here runs and every previous result is
+% reproduced bit for bit. The recording supplies a unit-RMS SHAPE and the
+% scenario still supplies the amplitude, for the reason set out in
+% rcflex_tremor_record.m -- fingertip translation cannot be converted into hand
+% attitude without inventing a moment arm.
+D_tremor_meta=[];
+if strcmp(name,'recorded')
+ rec='';
+ if ~isempty(C)&&isfield(C,'tremor_record');rec=C.tremor_record;end
+ assert(~isempty(rec),'SensoSpoon:ControlCase', ...
+  ['Scenario ''recorded'' needs a recording: set C.tremor_record to a tremordb ' ...
+   'record name (see import_tremordb() for the list).']);
+ [shape,D_tremor_meta]=rcflex_tremor_record(rec,t,C);
+end
 if ~strcmp(name,'intent');tremor(:,1:2)=deg2rad(amplitude)*ramp.*shape;end
 if strcmp(name,'combined')||strcmp(name,'irregular');pos=.001*ramp.*[.5*sin(2*pi*hz*t+.2),.3*sin(2*pi*hz*t+1.1),sin(2*pi*hz*t-.4)];end
 angles=intent(:,1:2)+tremor(:,1:2);rate=deriv(angles,dt);acc=deriv(rate,dt);pv=deriv(pos,dt);pa=deriv(pv,dt);
 D=struct('name',name,'time',t,'base',[angles rate acc pos pv pa],'intent',intent,...
  'tremor',tremor,'seed',seed,'frequency',hz,'amplitude',amplitude);
+D.tremor_meta=D_tremor_meta;
+% A recorded scenario has no commanded frequency, so the caller passes NaN.
+% Report the recording's own dominant frequency instead, so D.frequency means
+% the same thing for both kinds of scenario.
+if ~isempty(D_tremor_meta);D.frequency=D_tremor_meta.dominant_Hz;end
 D.semg=[];D.semg_time=[];D.semg_activation=[];
 if ~isempty(C)&&isfield(C,'semg_enabled')&&C.semg_enabled
  % Routed through rcflex_semg_source so a recorded dataset or the physical

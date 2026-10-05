@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "matlab": {
+      "type": "stdio",
+      "command": "C:\Users\Aditya\.matlab\agentic-toolkits\bin\matlab-mcp-server-windows-x64.exe",
+      "args": [],
+      "env": {},
+      "timeout": 3600000
+    }
+  }
+}

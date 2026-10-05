@@ -51,7 +51,7 @@ if nargin<5;channelMap=[];end
 gestures=[11 12 17];classes={'intent','intent','rest'};
 trials=1:3;
 
-blocks={};labels=struct('t_start',{},'t_end',{},'class',{});
+blocks={};labels=struct('t_start',{},'t_end',{},'class',{},'gesture',{});
 fs=[];tOff=0;
 for g=1:numel(gestures)
  for t=trials
@@ -68,7 +68,15 @@ for g=1:numel(gestures)
   dur=size(forearm,1)/fs;
   % Skip the first 0.5 s of every trial: the gesture is still being formed, and
   % a highpass transient sits at the join once the trials are concatenated.
-  labels(end+1)=struct('t_start',tOff+0.5,'t_end',tOff+dur,'class',classes{g}); %#ok<AGROW>
+  % The GESTURE is carried alongside the class, additively. The gate's contract
+  % only knows 'intent' and 'rest', but flexion and extension are not
+  % interchangeable when the observable is an agonist MINUS antagonist
+  % difference -- one drives the chosen agonist and the other the chosen
+  % antagonist -- so an analysis has to be able to tell them apart without
+  % counting segment indices. The dataset spec validates by isfield, so the
+  % extra field costs nothing.
+  labels(end+1)=struct('t_start',tOff+0.5,'t_end',tOff+dur,'class',classes{g},...
+   'gesture',gestures(g)); %#ok<AGROW>
   tOff=tOff+dur;
  end
 end
